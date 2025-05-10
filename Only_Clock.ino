@@ -2,7 +2,6 @@
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
-#include <NTPClient.h>
 #include <MD_Parola.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
@@ -14,9 +13,6 @@
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 
-// WiFi credentials
-const char* ssid = "SECRET_SSID";
-const char* password = "SECRET_PASS";
 
 // OTA settings
 const char* hostname = "ESP-Clock"; // Device hostname for OTA identification
@@ -41,10 +37,6 @@ MD_Parola P = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 // Set up ESP8266 web server
 ESP8266WebServer server(80);
 
-// Set up NTP client
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org");
-
 // Sensor objects
 DHT20 dht20;
 AGS02MA ags;
@@ -60,7 +52,12 @@ unsigned long lastSensorUpdate = 0;
 const long sensorUpdateInterval = 10000; // Update sensor readings every 10 seconds
 
 // Variables to store time components
-int hours, minutes, seconds;
+unsigned long epoch = 0;
+int hours = 0, minutes = 0, seconds = 0;
+unsigned long lastTimeUpdate = 0;
+const long timeUpdateInterval = 60000; // Update time from main device every minute
+unsigned long lastInternalUpdate = 0;
+const long internalUpdateInterval = 1000; // Internal time update every second
 char timeString[6]; // To store the formatted time string (HH:MM)
 bool relayState = false; // Track relay state
 int currentBrightness = DAY_BRIGHTNESS; // Track current brightness
@@ -105,11 +102,9 @@ void setup() {
   P.displayClear();
   P.setTextAlignment(PA_CENTER); // Center the text
   
-  // Connect to WiFi
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
   
-  WiFi.begin(ssid, password);
+  WiFi.begin("JARVIS-child", "ekhaneopassword");
+  WiFi.config(IPAddress(192,168,4,50), WiFi.gatewayIP(), WiFi.subnetMask());
   
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -123,10 +118,6 @@ void setup() {
   
   // Set up OTA
   setupOTA();
-  
-  // Initialize NTP client
-  timeClient.begin();
-  timeClient.setTimeOffset(19800); // Set your timezone offset in seconds (e.g., GMT+5:30 = 19800)
   
   // Set up web server routes
   server.on("/", handleRoot);
@@ -169,6 +160,8 @@ void setup() {
   // Start the server
   server.begin();
   Serial.println("HTTP server started");
+
+  updateTimeFromMainDevice();
   
   // Initialize time string with colon visible
   updateTimeDisplay();
@@ -178,7 +171,63 @@ void setup() {
   
 }
 
+void updateTimeFromMainDevice() {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+    
+    // Connect to the main device time API
+    // Note: Use the actual IP of your main device
+    http.begin(client, "http://192.168.4.1/api/time");
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      
+      // Parse JSON response
+      DynamicJsonDocument doc(256);
+      DeserializationError error = deserializeJson(doc, payload);
+      
+      if (!error) {
+        epoch = doc["epoch"];
+        hours = doc["hours"];
+        minutes = doc["minutes"];
+        seconds = doc["seconds"];
+        
+        Serial.println("Time synced: " + String(hours) + ":" + String(minutes) + ":" + String(seconds));
+      } else {
+        Serial.println("Failed to parse time JSON");
+      }
+    } else {
+      Serial.println("Failed to get time from main device, HTTP error: " + String(httpCode));
+    }
+    
+    http.end();
+  }
+}
 
+// New function to increment internal time between updates from main device
+void updateInternalTime() {
+  seconds++;
+  
+  if (seconds >= 60) {
+    seconds = 0;
+    minutes++;
+    
+    if (minutes >= 60) {
+      minutes = 0;
+      hours++;
+      
+      if (hours >= 24) {
+        hours = 0;
+      }
+    }
+  }
+  
+  // Also update epoch time
+  epoch++;
+}
 
 // New function to update the time display with or without colon based on blinking state
 void updateTimeDisplay() {
@@ -197,14 +246,7 @@ void loop() {
   
   // Handle client requests
   server.handleClient();
-  
-  // Update time from NTP server
-  timeClient.update();
-  
-  // Get hours, minutes and seconds
-  hours = timeClient.getHours();
-  minutes = timeClient.getMinutes();
-  seconds = timeClient.getSeconds();
+
   
   // Update sensor readings periodically
   unsigned long currentMillis = millis();
@@ -212,7 +254,18 @@ void loop() {
     lastSensorUpdate = currentMillis;
     updateSensorReadings();
   }
-  
+  if (currentMillis - lastTimeUpdate >= timeUpdateInterval) {
+    lastTimeUpdate = currentMillis;
+    updateTimeFromMainDevice();
+  }
+  if (currentMillis - lastInternalUpdate >= internalUpdateInterval) {
+    lastInternalUpdate = currentMillis;
+    updateInternalTime();
+    
+    // Toggle colon visibility
+    colonVisible = !colonVisible;
+    updateTimeDisplay();
+  }
   // Update display brightness based on time if auto brightness is enabled
   if (autoBrightness) {
     if (hours < 8 || hours > 22) {
@@ -223,12 +276,6 @@ void loop() {
     P.setIntensity(currentBrightness);
   }
   
-  // Check if it's time to toggle the colon visibility
-  if (currentMillis - previousMillis >= blinkInterval) {
-    previousMillis = currentMillis;
-    colonVisible = !colonVisible;  // Toggle the colon visibility
-    updateTimeDisplay();  // Update the display with the new colon state
-  }
 }
 
 // Update all sensor readings
@@ -308,7 +355,7 @@ void setupOTA() {
   ArduinoOTA.setHostname(hostname);
   
   // Set password for OTA
-  ArduinoOTA.setPassword("SECRET_OTA_PASS");
+  ArduinoOTA.setPassword("SECRETOTAPASS");
   
   // OTA callbacks
   ArduinoOTA.onStart([]() {
