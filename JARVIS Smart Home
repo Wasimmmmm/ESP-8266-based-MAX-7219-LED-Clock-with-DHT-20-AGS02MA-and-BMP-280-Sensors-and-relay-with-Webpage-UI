@@ -1,4 +1,10 @@
-// This was uploaded first,for the main device, but from now on Wifi_switch_beta2.ino would be the main device. The clock is the slave device.
+
+
+// Read first!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// This was uploaded first,for the main device, 
+// but from now on Wifi_switch_beta2.ino would be the main device.
+// The clock is the slave device.
+
 #include "DHT20.h"
 #include <Wire.h>
 #include <U8g2lib.h>
