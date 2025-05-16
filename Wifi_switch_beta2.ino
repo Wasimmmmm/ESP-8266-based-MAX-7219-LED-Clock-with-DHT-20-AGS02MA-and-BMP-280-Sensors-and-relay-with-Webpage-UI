@@ -1,3 +1,4 @@
+// In Arduino IDE go to Tools> MMU (It is after Debug Level)> Chnage to 16KB cache + 48KB IRAM(IRAM).
 #include "DHT20.h"
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -9,6 +10,34 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+
+// Function Prototypes - for better resource management
+void setupWiFiSensorsDisplay();
+void setupWebServer();
+void maintainWiFiConnection();
+void checkTouchButton();
+void updateDisplay();
+void handleSensorData();
+void checkTimer();
+void checkVOCLevels();
+void updateFanState(String state);
+void controlClockRelay(bool state);
+void setClockBrightness(int value);
+String getClockSensorData();
+void displayCenteredText(const char* text);
+void setOledBrightness(uint8_t brightness);
+String nextFanState(String currentState);
+void handleTimer();
+void handleTimerCancel();
+void handleTimerStatus();
+void toggleOutput(int index);
+void handleDeviceStates();
+void handleDeviceInfo();
+void handleFanControl();
+void handleAutoBrightness();
+void handleBrightnessControl();
+void handleReset();
+void handleRoot();
 
 DHT20 DHT;
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
@@ -46,6 +75,14 @@ unsigned long lastSensorTime = 0;
 unsigned long lastDisplayTime = 0;
 unsigned long lastReconnectTime = 0;
 
+//data from this device
+float sensorTemperature = 0.0;
+float sensorHumidity = 0.0;
+float heatIndex = 0.0;
+uint8_t displayBrightness = 60;
+bool autoBrightness = true;
+unsigned long lastBrightnessCheck = 0;
+
 //data from second device on 192.168.0.110
 String clockIP = "192.168.4.50";
 float remoteTemp = 0.0;
@@ -58,7 +95,6 @@ float avgHeatIndex = 0.0;
 float displayedPressure = 0.0;
 uint32_t displayedTVOC = 0;
 unsigned long currentBrightness = 0;
-String currentDisplayText = "";
 
 // For VOC auto relay control
 bool autoVOCControl = true;
@@ -79,30 +115,20 @@ DeviceTimer deviceTimers[3] = {
   { 0, "", false }   // Light (index 2)
 };
 
-float sensorTemperature = 0.0;
-float sensorHumidity = 0.0;
-float heatIndex = 0.0;
-uint8_t displayBrightness = 80;
-bool autoBrightness = true;
-unsigned long lastBrightnessCheck = 0;
-
 void setup() {
   Serial.begin(115200);
-  // Setup web server
-  setupWebServer();
   setupWiFiSensorsDisplay();
-
+  setupWebServer();
 }
 
 void loop() {
 
   unsigned long currentMillis = millis();
 
-  if (currentMillis - lastProcessTime > 100) {
+  if (currentMillis - lastProcessTime > 50) {
     lastProcessTime = currentMillis;
     server.handleClient();
     ArduinoOTA.handle();
-    maintainWiFiConnection();
     checkTouchButton();
     checkTimer();
   }
@@ -117,12 +143,13 @@ void loop() {
     handleSensorData();
     getClockSensorData();
     checkVOCLevels();
+    maintainWiFiConnection();
   }
 
   if (autoBrightness && currentMillis - lastBrightnessCheck > 30000) {
     lastBrightnessCheck = currentMillis;
     int currentHour = timeClient.getHours();
-    uint8_t newBrightness = (currentHour > 22 || currentHour < 7) ? 0 : 80;
+    uint8_t newBrightness = (currentHour > 22 || currentHour < 7) ? 0 : 60;
 
     if (newBrightness != displayBrightness) {
       displayBrightness = newBrightness;
@@ -175,7 +202,7 @@ void setupWiFiSensorsDisplay(){
   timeClient.begin();
   timeClient.forceUpdate();
   handleSensorData();
-  setOledBrightness((timeClient.getHours() < 7) ? 22 : 100);
+  setOledBrightness((timeClient.getHours() < 7) ? 22 : 60);
 
 }
 
@@ -411,36 +438,30 @@ void handleTimerStatus() {
 }
 
 void updateDisplay() {
-  char buffer[16];
-  String data;
-  switch (currentMode) {
-    case SHOW_AVG_TEMP:
-      snprintf(buffer, sizeof(buffer), "%2.1fC", avgTemp);
-      data = buffer;
-      currentMode = SHOW_AVG_HUMIDITY;
-      break;
-    case SHOW_AVG_HUMIDITY:
-      snprintf(buffer, sizeof(buffer), "%2.1f%%", avgHumid);
-      data = buffer;
-      currentMode = SHOW_HEAT_INDEX;
-      break;
-    case SHOW_HEAT_INDEX:
-      snprintf(buffer, sizeof(buffer), "HI:%2.1fC", avgHeatIndex);
-      data = buffer;
-      currentMode = SHOW_PRESSURE;
-      break;
-    case SHOW_PRESSURE:
-      snprintf(buffer, sizeof(buffer), "P:%2.1f", displayedPressure);
-      data = buffer;
-      currentMode = SHOW_TVOC;
-      break;
-    case SHOW_TVOC:
-      snprintf(buffer, sizeof(buffer), "%dPPB", displayedTVOC);
-      data = buffer;
-      currentMode = SHOW_AVG_TEMP;
-      break;
-  }
-  displayCenteredText(data.c_str());
+    char buffer[16]; // Local buffer created each call
+
+    switch (currentMode) {
+      case SHOW_AVG_TEMP:
+        snprintf(buffer, sizeof(buffer), "%2.1fC", avgTemp);
+        break;
+      case SHOW_AVG_HUMIDITY:
+        snprintf(buffer, sizeof(buffer), "%2.1f%%", avgHumid);
+        break;
+      case SHOW_HEAT_INDEX:
+        snprintf(buffer, sizeof(buffer), "HI:%2.1fC", avgHeatIndex);
+        break;
+      case SHOW_PRESSURE:
+        snprintf(buffer, sizeof(buffer), "P:%2.1f", displayedPressure);
+        break;
+      case SHOW_TVOC:
+        snprintf(buffer, sizeof(buffer), "%dPPB", displayedTVOC);
+        break;
+    }
+
+    displayCenteredText(buffer);
+
+    // Cycle to next display mode
+    currentMode = static_cast<DisplayMode>((currentMode + 1) % (SHOW_TVOC + 1));
 }
 
 void checkTouchButton() {
@@ -576,7 +597,7 @@ void handleAutoBrightness() {
     autoBrightness = (server.arg("state") == "true");
     if (autoBrightness) {
       int currentHour = timeClient.getHours();
-      displayBrightness = (currentHour > 22 || currentHour < 7) ? 0 : 80;
+      displayBrightness = (currentHour > 22 || currentHour < 7) ? 0 : 60;
       setOledBrightness(displayBrightness);
     }
     server.send(200, "application/json", "{\"auto\":" + String(autoBrightness ? "true" : "false") + "}");
@@ -601,7 +622,6 @@ void handleReset() {
 }
 
 void displayCenteredText(const char* text) {
-  currentDisplayText = text;
   u8g2.setFont(u8g2_font_helvB24_tr);
   int textWidth = u8g2.getStrWidth(text);
   u8g2.clearBuffer();
@@ -613,18 +633,21 @@ void displayCenteredText(const char* text) {
 }
 
 void checkVOCLevels() {
-  if (autoVOCControl && remoteTVOC > VOC_THRESHOLD) {
-    // Turn on relay if VOC is too high
-    if (!relayTriggeredByVOC) {
-      controlClockRelay(true);
-      relayTriggeredByVOC = true;
+  if (autoVOCControl) {
+    if (remoteTVOC > VOC_THRESHOLD || avgTemp >= 35) {
+      // Turn on relay if VOC is high or temp is high
+      if (!relayTriggeredByVOC) {
+        controlClockRelay(true);
+        relayTriggeredByVOC = true;
+      }
+    } else if (relayTriggeredByVOC && remoteTVOC <= VOC_THRESHOLD && avgTemp < 35) {
+      // Turn off relay if both VOC and temp are below thresholds
+      controlClockRelay(false);
+      relayTriggeredByVOC = false;
     }
-  } else if (relayTriggeredByVOC && remoteTVOC <= VOC_THRESHOLD) {
-    // Turn off relay when VOC drops below threshold
-    controlClockRelay(false);
-    relayTriggeredByVOC = false;
   }
 }
+
 
 void maintainWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
