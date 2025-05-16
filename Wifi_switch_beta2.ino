@@ -1,4 +1,5 @@
 // In Arduino IDE go to Tools> MMU (It is after Debug Level)> Chnage to 16KB cache + 48KB IRAM(IRAM).
+#include "credentials.h" // Either create a credentials.h file with the needed credentials or write the credentials directly into code between "".
 #include "DHT20.h"
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -84,7 +85,7 @@ bool autoBrightness = true;
 unsigned long lastBrightnessCheck = 0;
 
 //data from second device on 192.168.0.110
-String clockIP = "192.168.4.50";
+String clockIP = CLOCK_IP;
 float remoteTemp = 0.0;
 float remoteHumid = 0.0;
 float remotePressure = 0.0;
@@ -163,11 +164,11 @@ void loop() {
 void setupWiFiSensorsDisplay(){
   WiFi.mode(WIFI_AP_STA);
   // Start AP for clock with SSID: JARVIS-AP, Password: your_password
-  WiFi.softAP("JARVIS-child", "ekhaneopassword");
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
   // Connect to predefined STA network
-  WiFi.begin("SECRET_SSID", "SECRET_PASS");
-
-  Serial.print("Connecting to WiFi");
+  WiFi.begin(STA_SSID, STA_PASSWORD);
+  
+  Serial.println("Connecting to WiFi");
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts++ < 30) {
     delay(500);
@@ -178,8 +179,8 @@ void setupWiFiSensorsDisplay(){
   }
 
   // Setup OTA
-  ArduinoOTA.setHostname("JARVIS");
-  ArduinoOTA.setPassword("SECRETOTAPASS");
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.begin();
 
   Wire.begin();
