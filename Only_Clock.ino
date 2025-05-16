@@ -156,7 +156,6 @@ void setup() {
     json += "}";
     server.send(200, "application/json", json);
   });
-  
   // Start the server
   server.begin();
   Serial.println("HTTP server started");
