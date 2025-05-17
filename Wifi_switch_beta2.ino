@@ -60,7 +60,7 @@ struct Output {
 
 Output outputs[] = {
   { 16, "On", "Fan" },          // D0
-  { 15, "Off", "Tube Light" },  // D8
+  { 15, "Off", "Big Light" },  // D8
   { 12, "Off", "Light" },       // D6
   { 14, "On", "Low Speed" },    // D5 (Fan Low Speed)
 };
@@ -112,7 +112,7 @@ struct DeviceTimer {
 // Array of timers (one for each controllable device)
 DeviceTimer deviceTimers[3] = {
   { 0, "", false },  // Fan (index 0)
-  { 0, "", false },  // Tube Light (index 1)
+  { 0, "", false },  // Big Light (index 1)
   { 0, "", false }   // Light (index 2)
 };
 
@@ -233,29 +233,74 @@ void setupWebServer(){
     server.send(200, "text/plain", "OK");
   });
 
-  server.on("/clock/brightness", []() {
+  server.on("/clock/brightness", HTTP_GET, []() {
+    WiFiClient client;
+    HTTPClient http;
+    String url = "http://" + clockIP + "/brightness/get";
+    http.begin(client, url);
+    if (http.GET() == HTTP_CODE_OK) {
+      String payload = http.getString();
+      DynamicJsonDocument doc(256);
+      deserializeJson(doc, payload);
+      int brightness = doc["brightness"];
+      bool autoState = doc["auto"];
+      server.send(200, "application/json", payload); // Forward full JSON
+    }
+    http.end();
+  });
+
+  server.on("/clock/brightness", HTTP_POST, []() {
     if (server.hasArg("value")) {
       setClockBrightness(server.arg("value").toInt());
     }
-    server.send(200, "text/plain", String(currentBrightness));
+    server.send(200, "text/plain", "OK");
   });
 
-  server.on("/clock/brightness/auto", []() {
+  server.on("/clock/brightness/auto", HTTP_GET, []() {
     WiFiClient client;
     HTTPClient http;
-    String url = "http://" + clockIP + "/brightness/auto";
-    if (server.hasArg("state")) {
-      url += "?state=" + server.arg("state");
-    }
+    String url = "http://" + clockIP + "/brightness/get";
     http.begin(client, url);
-    if (server.method() == HTTP_POST) {
-      http.POST("");
+    if (http.GET() == HTTP_CODE_OK) {
+      String payload = http.getString();
+      DynamicJsonDocument doc(256);
+      deserializeJson(doc, payload);
+      bool autoState = doc["auto"];
+      server.send(200, "text/plain", autoState ? "on" : "off");
     } else {
-      http.GET();
+      server.send(500, "text/plain", "Error");
     }
-    String response = http.getString();
     http.end();
-    server.send(200, "text/plain", response);
+  });
+
+  server.on("/clock/brightness/auto", HTTP_POST, []() {
+    if (server.hasArg("state")) {
+      String state = server.arg("state");
+      WiFiClient client;
+      HTTPClient http;
+      String url = "http://" + clockIP + "/brightness/auto";
+      http.begin(client, url);
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      String postData = "state=" + state;
+      http.POST(postData);
+      String response = http.getString();
+      http.end();
+      server.send(200, "text/plain", response);
+    }
+  });
+
+  server.on("/clock/relay/status", HTTP_GET, []() {
+    WiFiClient client;
+    HTTPClient http;
+    String url = "http://" + clockIP + "/relay/state";
+    http.begin(client, url);
+    if (http.GET() == HTTP_CODE_OK) {
+      String response = http.getString();
+      server.send(200, "text/plain", response);
+    } else {
+      server.send(500, "text/plain", "Error");
+    }
+    http.end();
   });
 
   server.on("/voc/auto", []() {
@@ -296,9 +341,11 @@ void controlClockRelay(bool state) {
 void setClockBrightness(int value) {
   WiFiClient client;
   HTTPClient http;
-  String url = "http://" + clockIP + "/brightness/set?value=" + String(value);
+  String url = "http://" + clockIP + "/brightness";
   http.begin(client, url);
-  http.GET();
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  String postData = "value=" + String(value);
+  http.POST(postData);
   http.end();
 }
 
@@ -348,7 +395,7 @@ void handleTimer() {
   int deviceIndex = -1;
   if (device == "fan") {
     deviceIndex = 0;
-  } else if (device == "tubeLight") {
+  } else if (device == "bigLight") {
     deviceIndex = 1;
   } else if (device == "light") {
     deviceIndex = 2;
@@ -372,7 +419,7 @@ void handleTimerCancel() {
     int deviceIndex = -1;
 
     if (device == "fan") deviceIndex = 0;
-    else if (device == "tubeLight") deviceIndex = 1;
+    else if (device == "bigLight") deviceIndex = 1;
     else if (device == "light") deviceIndex = 2;
 
     if (deviceIndex >= 0) {
@@ -414,8 +461,8 @@ void handleTimerStatus() {
         deviceName = "Fan";
         deviceId = "fan";
       } else if (i == 1) {
-        deviceName = "Tube Light";
-        deviceId = "tubeLight";
+        deviceName = "Big Light";
+        deviceId = "bigLight";
       } else if (i == 2) {
         deviceName = "Light";
         deviceId = "light";
@@ -513,7 +560,7 @@ void checkTimer() {
         // Fan
         updateFanState(deviceTimers[i].targetState);
       } else if (i >= 1 && i <= 2) {
-        // Tube Light or Light
+        // Big Light or Light
         outputs[i].state = deviceTimers[i].targetState;
         digitalWrite(outputs[i].pin, (deviceTimers[i].targetState == "On") ? HIGH : LOW);
       }
@@ -569,7 +616,7 @@ void handleSensorData() {
 void handleDeviceStates() {
   String json = "{";
   json += "\"fan\":\"" + outputs[0].state + "\",";
-  json += "\"tubeLight\":\"" + outputs[1].state + "\",";
+  json += "\"bigLight\":\"" + outputs[1].state + "\",";
   json += "\"light\":\"" + outputs[2].state + "\"";
   json += "}";
   server.send(200, "application/json", json);
@@ -1033,11 +1080,11 @@ const char* MAIN_page = R"=====(
         
         <div class="control-item">
           <div>
-            <div class="control-label">💡 Tube Light</div>
-            <div class="control-status" id="tubeLightStatus">--</div>
+            <div class="control-label">💡 Big Light</div>
+            <div class="control-status" id="bigLightStatus">--</div>
           </div>
           <label class="switch">
-            <input type="checkbox" id="tubeLightToggle" onclick="toggleDevice('tubeLight')">
+            <input type="checkbox" id="bigLightToggle" onclick="toggleDevice('bigLight')">
             <span class="slider"></span>
           </label>
         </div>
@@ -1056,7 +1103,7 @@ const char* MAIN_page = R"=====(
         <div class="control-item">
           <div>
             <div class="control-label">🌿 Auto VOC Control</div>
-            <div class="control-status">Activates exhaust fan at 1500ppb</div>
+            <div class="control-status">Activates exhaust fan at 1500ppb or 35°C</div>
           </div>
           <label class="switch">
             <input type="checkbox" id="vocAutoToggle" onclick="toggleVOCControl(this.checked)">
@@ -1084,7 +1131,7 @@ const char* MAIN_page = R"=====(
         <div class="timer-controls">
           <select id="timerDevice" class="timer-select">
             <option value="fan">Fan</option>
-            <option value="tubeLight">Tube Light</option>
+            <option value="bigLight">Big Light</option>
             <option value="light">Light</option>
           </select>
           <select id="timerState" class="timer-select"></select>
@@ -1190,8 +1237,8 @@ const char* MAIN_page = R"=====(
         .then(data => {
           document.getElementById('fanStatus').textContent = data.fan;
           document.getElementById('fanToggle').checked = !data.fan.includes('Off');
-          document.getElementById('tubeLightStatus').textContent = data.tubeLight;
-          document.getElementById('tubeLightToggle').checked = data.tubeLight === 'On';
+          document.getElementById('bigLightStatus').textContent = data.bigLight;
+          document.getElementById('bigLightToggle').checked = data.bigLight === 'On';
           document.getElementById('lightStatus').textContent = data.light;
           document.getElementById('lightToggle').checked = data.light === 'On';
         });
@@ -1245,7 +1292,7 @@ const char* MAIN_page = R"=====(
     function toggleDevice(device) {
       const endpoints = {
         fan: '/fan/toggle',
-        tubeLight: '/output/1/toggle',
+        bigLight: '/output/1/toggle',
         light: '/output/2/toggle'
       };
       fetch(endpoints[device])
@@ -1342,12 +1389,27 @@ const char* MAIN_page = R"=====(
           document.getElementById('vocAutoToggle').checked = (state === 'on');
         });
 
+      // In fetchInfo() or initialization
+      fetch('/clock/relay/status')
+        .then(r => r.text())
+        .then(state => {
+          document.getElementById('clockRelay').checked = (state === 'ON');
+        });
+
       // Get initial clock relay state and brightness
       fetch('/clock/brightness')
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('clockBrightnessSlider').value = data.brightness;
+          document.getElementById('clockBrightness').textContent = data.brightness;
+          document.getElementById('clockAutoBrightnessToggle').checked = data.auto;
+        });
+
+      fetch('/clock/brightness/auto')
         .then(r => r.text())
-        .then(val => {
-          document.getElementById('clockBrightnessSlider').value = val;
-          document.getElementById('clockBrightness').textContent = val;
+        .then(state => {
+          document.getElementById('clockAutoBrightnessToggle').checked = (state === 'on');
+          document.getElementById('clockBrightnessSlider').disabled = (state === 'on');
         });
       
       // Load all initial data
