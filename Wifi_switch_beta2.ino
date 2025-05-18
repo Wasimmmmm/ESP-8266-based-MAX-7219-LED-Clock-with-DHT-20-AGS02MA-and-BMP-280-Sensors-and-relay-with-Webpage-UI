@@ -126,9 +126,10 @@ void loop() {
 
   unsigned long currentMillis = millis();
 
+  server.handleClient();
+
   if (currentMillis - lastProcessTime > 50) {
     lastProcessTime = currentMillis;
-    server.handleClient();
     ArduinoOTA.handle();
     checkTouchButton();
     checkTimer();
