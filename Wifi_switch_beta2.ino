@@ -11,6 +11,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+#include <digitalWriteFast.h> // https://docs.arduino.cc/libraries/digitalwritefast/
 
 // Function Prototypes - for better resource management
 void setupWiFiSensorsDisplay();
@@ -53,19 +54,19 @@ enum DisplayMode {
 DisplayMode currentMode = SHOW_AVG_TEMP;
 
 struct Output {
-  int pin;
+  uint8_t pin;
   String state;
   String name;
 };
 
 Output outputs[] = {
   { 16, "On", "Fan" },          // D0
-  { 15, "Off", "Big Light" },  // D8
+  { 15, "Off", "Big Light" },   // D8
   { 12, "Off", "Light" },       // D6
   { 14, "On", "Low Speed" },    // D5 (Fan Low Speed)
 };
 
-const int touchPin = 13;  // D7
+const uint8_t touchPin = 13;  // D7
 
 ESP8266WebServer server(80);
 WiFiUDP udp;
@@ -123,7 +124,6 @@ void setup() {
 }
 
 void loop() {
-
   unsigned long currentMillis = millis();
 
   server.handleClient();
@@ -198,18 +198,16 @@ void setupWiFiSensorsDisplay(){
   for (auto& output : outputs) {
     pinMode(output.pin, OUTPUT);
     if (output.name == "Fan") updateFanState(output.state);
-    else digitalWrite(output.pin, (output.state == "On") ? HIGH : LOW);
+    else digitalWriteFast(output.pin, (output.state == "On") ? HIGH : LOW);
   }
 
   timeClient.begin();
   timeClient.forceUpdate();
   handleSensorData();
   setOledBrightness((timeClient.getHours() < 7) ? 22 : 60);
-
 }
 
 void setupWebServer(){
-
   server.on("/", handleRoot);
   server.on("/reset", handleReset);
   server.on("/fan/toggle", handleFanControl);
@@ -351,7 +349,6 @@ void setClockBrightness(int value) {
 }
 
 String getClockSensorData() {
-
   WiFiClient client;
   HTTPClient http;
 
@@ -515,12 +512,13 @@ void updateDisplay() {
 
 void checkTouchButton() {
   static bool lastState = HIGH;
-  bool currentState = digitalRead(touchPin);
+  bool currentState = digitalReadFast(touchPin);
   if (currentState == HIGH && lastState == LOW) {
-    digitalWrite(outputs[1].pin, !digitalRead(outputs[1].pin));
-    digitalWrite(outputs[2].pin, !digitalRead(outputs[2].pin));
-    outputs[1].state = digitalRead(outputs[1].pin) ? "On" : "Off";
-    outputs[2].state = digitalRead(outputs[2].pin) ? "On" : "Off";
+    // Using digitalWriteFast for toggle operations
+    digitalWriteFast(outputs[1].pin, !digitalReadFast(outputs[1].pin));
+    digitalWriteFast(outputs[2].pin, !digitalReadFast(outputs[2].pin));
+    outputs[1].state = digitalReadFast(outputs[1].pin) ? "On" : "Off";
+    outputs[2].state = digitalReadFast(outputs[2].pin) ? "On" : "Off";
   }
   lastState = currentState;
 }
@@ -540,14 +538,14 @@ String nextFanState(String currentState) {
 void updateFanState(String state) {
   outputs[0].state = state;
   if (state == "Off") {
-    digitalWrite(outputs[0].pin, LOW);
-    digitalWrite(outputs[3].pin, HIGH);
+    digitalWriteFast(outputs[0].pin, LOW);
+    digitalWriteFast(outputs[3].pin, HIGH);
   } else if (state == "On") {
-    digitalWrite(outputs[0].pin, HIGH);
-    digitalWrite(outputs[3].pin, HIGH);
+    digitalWriteFast(outputs[0].pin, HIGH);
+    digitalWriteFast(outputs[3].pin, HIGH);
   } else {
-    digitalWrite(outputs[0].pin, LOW);
-    digitalWrite(outputs[3].pin, LOW);
+    digitalWriteFast(outputs[0].pin, LOW);
+    digitalWriteFast(outputs[3].pin, LOW);
   }
 }
 
@@ -563,7 +561,7 @@ void checkTimer() {
       } else if (i >= 1 && i <= 2) {
         // Big Light or Light
         outputs[i].state = deviceTimers[i].targetState;
-        digitalWrite(outputs[i].pin, (deviceTimers[i].targetState == "On") ? HIGH : LOW);
+        digitalWriteFast(outputs[i].pin, (deviceTimers[i].targetState == "On") ? HIGH : LOW);
       }
 
       // Clear the timer
@@ -575,7 +573,6 @@ void checkTimer() {
 }
 
 void handleSensorData() {
-
   if (DHT.read() == DHT20_OK) {
     sensorTemperature = DHT.getTemperature();
     sensorHumidity = DHT.getHumidity();
@@ -636,7 +633,7 @@ void handleFanControl() {
 void toggleOutput(int index) {
   if (index >= 1 && index <= 2) {
     outputs[index].state = (outputs[index].state == "On") ? "Off" : "On";
-    digitalWrite(outputs[index].pin, (outputs[index].state == "On") ? HIGH : LOW);
+    digitalWriteFast(outputs[index].pin, (outputs[index].state == "On") ? HIGH : LOW);
     server.send(200, "application/json", "{\"status\":\"success\"}");
   }
 }
@@ -652,7 +649,6 @@ void handleAutoBrightness() {
     server.send(200, "application/json", "{\"auto\":" + String(autoBrightness ? "true" : "false") + "}");
   }
 }
-
 
 void handleBrightnessControl() {
   if (server.hasArg("value")) {
@@ -678,7 +674,6 @@ void displayCenteredText(const char* text) {
   int y = (32 + u8g2.getMaxCharHeight()) / 2;
   u8g2.drawStr(x, y, text);
   u8g2.sendBuffer();
-  
 }
 
 void checkVOCLevels() {
@@ -696,7 +691,6 @@ void checkVOCLevels() {
     }
   }
 }
-
 
 void maintainWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
