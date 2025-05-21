@@ -42,8 +42,7 @@ void handleReset();
 void handleRoot();
 
 DHT20 DHT;
-U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
-
+U8G2_SSD1306_128X32_UNIVISION_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 enum DisplayMode {
   SHOW_AVG_TEMP,
   SHOW_AVG_HUMIDITY,
@@ -100,7 +99,6 @@ unsigned long currentBrightness = 0;
 
 // For VOC auto relay control
 bool autoVOCControl = true;
-const uint32_t VOC_THRESHOLD = 1500;  // ppb threshold for turning on relay
 bool relayTriggeredByVOC = false;
 
 // Timer management structure
@@ -667,25 +665,24 @@ void handleReset() {
 }
 
 void displayCenteredText(const char* text) {
-  u8g2.setFont(u8g2_font_helvB24_tr);
-  int textWidth = u8g2.getStrWidth(text);
-  u8g2.clearBuffer();
-  int x = (128 - textWidth) / 2;
-  int y = (32 + u8g2.getMaxCharHeight()) / 2;
-  u8g2.drawStr(x, y, text);
-  u8g2.sendBuffer();
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_helvB24_tr);
+    int textWidth = u8g2.getStrWidth(text);
+    int x = (128 - textWidth) / 2;
+    int y = (32 + u8g2.getMaxCharHeight()) / 2;
+    u8g2.drawStr(x, y, text);
+  } while (u8g2.nextPage());
 }
 
 void checkVOCLevels() {
   if (autoVOCControl) {
-    if (remoteTVOC > VOC_THRESHOLD || avgTemp >= 35) {
-      // Turn on relay if VOC is high or temp is high
+    if (remoteTVOC >= 1500 || avgHeatIndex >= 40) {
       if (!relayTriggeredByVOC) {
         controlClockRelay(true);
         relayTriggeredByVOC = true;
       }
-    } else if (relayTriggeredByVOC && remoteTVOC <= VOC_THRESHOLD && avgTemp < 35) {
-      // Turn off relay if both VOC and temp are below thresholds
+    } else if (relayTriggeredByVOC && remoteTVOC < 1500 && avgHeatIndex < 40) {
       controlClockRelay(false);
       relayTriggeredByVOC = false;
     }
@@ -1098,7 +1095,7 @@ const char* MAIN_page = R"=====(
         <div class="control-item">
           <div>
             <div class="control-label">🌿 Auto VOC Control</div>
-            <div class="control-status">Activates exhaust fan at 1500ppb or 35°C</div>
+            <div class="control-status">Activates exhaust fan at 1500ppb or feels like 40°C</div>
           </div>
           <label class="switch">
             <input type="checkbox" id="vocAutoToggle" onclick="toggleVOCControl(this.checked)">
