@@ -6,6 +6,7 @@ import android.os.Looper
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.materialswitch.MaterialSwitch
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -40,13 +41,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvClockBrightnessValue: TextView
 
     // UI Elements - Switches
-    private lateinit var switchFan: Switch
-    private lateinit var switchBigLight: Switch
-    private lateinit var switchLight: Switch
-    private lateinit var switchVocAuto: Switch
-    private lateinit var switchClockRelay: Switch
-    private lateinit var switchAutoBrightness: Switch
-    private lateinit var switchClockAutoBrightness: Switch
+    private lateinit var switchFan: MaterialSwitch
+    private lateinit var switchBigLight: MaterialSwitch
+    private lateinit var switchLight: MaterialSwitch
+    private lateinit var switchVocAuto: MaterialSwitch
+    private lateinit var switchClockRelay: MaterialSwitch
+    private lateinit var switchAutoBrightness: MaterialSwitch
+    private lateinit var switchClockAutoBrightness: MaterialSwitch
 
     // UI Elements - Timer controls
     private lateinit var spinnerTimerDevice: Spinner
