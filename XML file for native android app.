@@ -106,7 +106,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="🌡️ Temperature"
+                            android:text="🌡️ Temp"
                             android:textSize="12sp"
                             android:textColor="#6c757d"
                             android:gravity="center" />
@@ -338,6 +338,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:textColor="@color/black"
                                 android:text="🌀 Fan"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -353,11 +354,10 @@
 
                         </LinearLayout>
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_fan"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -383,6 +383,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:textColor="@color/black"
                                 android:text="💡 Big Light"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -398,11 +399,10 @@
 
                         </LinearLayout>
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_big_light"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -428,6 +428,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:textColor="@color/black"
                                 android:text="🔆 Light"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -443,11 +444,10 @@
 
                         </LinearLayout>
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_light"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -473,6 +473,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:textColor="@color/black"
                                 android:text="🌿 Auto VOC Control"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -487,11 +488,10 @@
 
                         </LinearLayout>
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_voc_auto"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -517,6 +517,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:textColor="@color/black"
                                 android:text="⏰ Clock Relay"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -531,11 +532,10 @@
 
                         </LinearLayout>
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_clock_relay"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -602,6 +602,8 @@
                             android:id="@+id/spinner_timer_state"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:outlineAmbientShadowColor="@color/black"
+                            android:textColor="@color/black"
                             android:layout_weight="1"
                             android:layout_marginHorizontal="5dp"
                             android:background="@drawable/spinner_background"
@@ -613,7 +615,8 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:layout_marginStart="5dp"
-                            android:background="@drawable/edit_text_background"
+                            android:textColor="@color/black"
+                            android:background="@drawable/spinner_background"
                             android:padding="10dp"
                             android:hint="Minutes"
                             android:inputType="number"
@@ -666,7 +669,7 @@
                             android:layout_height="wrap_content"
                             android:text="No active timers"
                             android:textSize="14sp"
-                            android:textColor="#666666" />
+                            android:textColor="#000000" />
 
                     </LinearLayout>
 
@@ -725,15 +728,15 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:textColor="@color/black"
                             android:text="🤖 Auto Brightness"
                             android:textSize="16sp"
                             android:textStyle="bold" />
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_auto_brightness"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -747,6 +750,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:textColor="@color/black"
                             android:text="🔆 Display Brightness"
                             android:textSize="16sp"
                             android:textStyle="bold"
@@ -757,7 +761,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:max="100"
-                            android:progress="50"
+                            android:progress="60"
                             android:progressTint="#2196F3"
                             android:thumbTint="#2196F3" />
 
@@ -775,15 +779,15 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:textColor="@color/black"
                             android:text="🤖 Clock Auto Brightness"
                             android:textSize="16sp"
                             android:textStyle="bold" />
 
-                        <Switch
+                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_clock_auto_brightness"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:theme="@style/SwitchTheme" />
+                            android:layout_height="wrap_content" />
 
                     </LinearLayout>
 
@@ -805,6 +809,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
+                                android:textColor="@color/black"
                                 android:text="⏰ Clock Brightness"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
