@@ -12,7 +12,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
-
+#include <digitalWriteFast.h>
 
 // OTA settings
 const char* hostname = "ESP-Clock"; // Device hostname for OTA identification
@@ -69,15 +69,12 @@ bool colonVisible = true;
 unsigned long previousMillis = 0;
 const long blinkInterval = 1000; // Blink every 1000ms (1 second)
 
-// Simple HTML page with toggle switch, brightness slider, and sensor data
-const char* MAIN_page = "";
-
 void setup() {
   Serial.begin(115200);
   
   // Initialize the relay pin as output and turn it off
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH);
+  digitalWriteFast(RELAY_PIN, HIGH);
   
   // Initialize I2C for sensors
   Wire.begin(D2, D1); // SDA=D2, SCL=D1
@@ -120,7 +117,6 @@ void setup() {
   setupOTA();
   
   // Set up web server routes
-  server.on("/", handleRoot);
   server.on("/relay/on", handleRelayOn);
   server.on("/relay/off", handleRelayOff);
   server.on("/relay/status", handleRelayStatus);
@@ -131,11 +127,11 @@ void setup() {
   server.on("/device/restart", handleRestart);
   server.on("/sensor/data", handleSensorData);
   server.on("/relay/state", HTTP_GET, []() {
-  server.send(200, "text/plain", digitalRead(RELAY_PIN) == LOW ? "ON" : "OFF");
+  server.send(200, "text/plain", digitalReadFast(RELAY_PIN) == LOW ? "ON" : "OFF");
   });
 
   server.on("/relay/toggle", HTTP_POST, []() {
-    digitalWrite(RELAY_PIN, !digitalRead(RELAY_PIN));
+    digitalWriteFast(RELAY_PIN, !digitalReadFast(RELAY_PIN));
     server.send(200, "text/plain", "OK");
   });
 
@@ -414,18 +410,15 @@ void setupOTA() {
 }
 
 // Web server handlers
-void handleRoot() {
-  server.send(200, "text/html", MAIN_page);
-}
 
 void handleRelayOn() {
-  digitalWrite(RELAY_PIN, LOW);
+  digitalWriteFast(RELAY_PIN, LOW);
   relayState = true;
   server.send(200, "text/plain", "ON");
 }
 
 void handleRelayOff() {
-  digitalWrite(RELAY_PIN, HIGH);
+  digitalWriteFast(RELAY_PIN, HIGH);
   relayState = false;
   server.send(200, "text/plain", "OFF");
 }
