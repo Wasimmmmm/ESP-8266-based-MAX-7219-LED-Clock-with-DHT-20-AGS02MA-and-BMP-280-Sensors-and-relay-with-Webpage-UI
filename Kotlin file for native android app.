@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
@@ -23,6 +24,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainHandler: Handler
     private var deviceIP = "192.168.0.108" // Default IP, make configurable
     private lateinit var baseUrl: String
+
+    // Loading screen elements
+    private lateinit var loadingContainer: RelativeLayout
+    private lateinit var loadingProgressBar: ProgressBar
+    private lateinit var loadingPercentage: TextView
+    private lateinit var loadingText: TextView
+    private lateinit var mainContent: ScrollView
+    private var loadingStartTime: Long = 0
+
+    // Loading state tracking
+    private var completedTasks = 0
+    private val totalTasks = 6 // sensorData, deviceStates, timerStatus, vocControl, clockRelay, clockBrightness
+    private var allTasksCompleted = false
+    private val loadingUpdateInterval = 50L // 50ms for smooth animation
+    private lateinit var smoothLoadingRunnable: Runnable
 
     // UI Elements - Sensor data
     private lateinit var tvIpAddress: TextView
@@ -74,8 +90,25 @@ class MainActivity : AppCompatActivity() {
         setupEventListeners()
         setupSpinners()
         loadDeviceIP()
+
+        showLoadingScreen()
         loadInitialData()
-        startDataRefresh()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Show loading screen when resuming if not already visible
+        if (loadingContainer.visibility != android.view.View.VISIBLE) {
+            showLoadingScreen()
+            loadInitialData()
+        } else {
+            startDataRefresh()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopDataRefresh()
     }
 
     override fun onDestroy() {
@@ -111,6 +144,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeViews() {
+        // Loading screen elements
+        loadingContainer = findViewById(R.id.loading_container)
+        loadingProgressBar = findViewById(R.id.loading_progress_bar)
+        loadingPercentage = findViewById(R.id.loading_percentage)
+        loadingText = findViewById(R.id.loading_text)
+        mainContent = findViewById(R.id.main_content)
+
         // Sensor data TextViews
         tvIpAddress = findViewById(R.id.tv_ip_address)
         tvTemperature = findViewById(R.id.tv_temperature)
@@ -147,6 +187,80 @@ class MainActivity : AppCompatActivity() {
         seekbarBrightness = findViewById(R.id.seekbar_brightness)
         seekbarClockBrightness = findViewById(R.id.seekbar_clock_brightness)
         btnRestartDevice = findViewById(R.id.btn_restart_device)
+    }
+
+    private fun showLoadingScreen() {
+        loadingContainer.visibility = android.view.View.VISIBLE
+        mainContent.visibility = android.view.View.GONE
+
+        // Reset state
+        completedTasks = 0
+        allTasksCompleted = false
+        loadingStartTime = System.currentTimeMillis()
+
+        startSmoothLoading()
+    }
+
+    private fun startSmoothLoading() {
+        smoothLoadingRunnable = object : Runnable {
+            override fun run() {
+                val elapsed = System.currentTimeMillis() - loadingStartTime
+
+                val progress = when {
+                    elapsed < 2500 -> (elapsed * 80 / 2500).toInt() // 0-80% over 2.5 seconds
+                    allTasksCompleted -> {
+                        val completionElapsed = elapsed - 2500
+                        minOf(80 + (completionElapsed * 20 / 1000).toInt(), 100) // 80-100% over 1 second
+                    }
+                    else -> 80 // Stay at 80%
+                }
+
+                loadingProgressBar.progress = progress
+                loadingPercentage.text = "$progress%"
+
+                val loadingMessages = arrayOf(
+                    "Connecting to JARVIS...",
+                    "Loading sensor data...",
+                    "Fetching device states...",
+                    "Checking timers...",
+                    "Synchronizing settings..."
+                )
+
+                when {
+                    progress < 80 -> {
+                        val messageIndex = minOf(progress / 16, loadingMessages.size - 1)
+                        loadingText.text = loadingMessages[messageIndex]
+                        mainHandler.postDelayed(this, loadingUpdateInterval)
+                    }
+                    progress < 100 -> {
+                        if (allTasksCompleted) {
+                            loadingText.text = "Ready!"
+                        } else if (elapsed >= 10000) {
+                            loadingText.text = "Waiting for connection..."
+                        }
+                        mainHandler.postDelayed(this, loadingUpdateInterval)
+                    }
+                    else -> {
+                        mainHandler.postDelayed({ hideLoadingScreen() }, 500)
+                    }
+                }
+            }
+        }
+        mainHandler.post(smoothLoadingRunnable)
+    }
+
+    private fun onLoadingTaskComplete() {
+        completedTasks++
+        if (completedTasks >= totalTasks) {
+            allTasksCompleted = true
+        }
+    }
+
+    private fun hideLoadingScreen() {
+        mainHandler.removeCallbacks(smoothLoadingRunnable)
+        loadingContainer.visibility = android.view.View.GONE
+        mainContent.visibility = android.view.View.VISIBLE
+        startDataRefresh()
     }
 
     private fun setupEventListeners() {
@@ -231,6 +345,7 @@ class MainActivity : AppCompatActivity() {
                 deviceIP = newIP
                 updateBaseUrl()
                 saveDeviceIP()
+                showLoadingScreen()
                 loadInitialData()
                 Toast.makeText(this, "IP updated to: $deviceIP", Toast.LENGTH_SHORT).show()
             }
@@ -311,6 +426,9 @@ class MainActivity : AppCompatActivity() {
                 fetchSensorData()
                 fetchDeviceStates()
                 fetchTimerStatus()
+                fetchVOCControlState()
+                fetchClockRelayState()
+                fetchClockBrightnessState()
                 mainHandler.postDelayed(this, refreshInterval)
             }
         }
@@ -376,8 +494,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    // Data fetching methods
+    // Data fetching methods with loading tracking
     private fun fetchSensorData() {
         makeGetRequest("/sensorData", object : ApiCallback {
             override fun onSuccess(response: String) {
@@ -399,10 +516,16 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: JSONException) {
 
                 }
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                showError("Failed to fetch sensor data: $error")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -427,10 +550,16 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: JSONException) {
 
                 }
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                showError("Failed to fetch device states: $error")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -461,10 +590,16 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: JSONException) {
 
                 }
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                // Don't show error for timer status as it's less critical
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -473,10 +608,16 @@ class MainActivity : AppCompatActivity() {
         makeGetRequest("/voc/auto", object : ApiCallback {
             override fun onSuccess(response: String) {
                 switchVocAuto.isChecked = response.trim() == "on"
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                // Ignore error for non-critical feature
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -485,10 +626,16 @@ class MainActivity : AppCompatActivity() {
         makeGetRequest("/clock/relay/status", object : ApiCallback {
             override fun onSuccess(response: String) {
                 switchClockRelay.isChecked = response.trim() == "ON"
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                // Ignore error for non-critical feature
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -508,10 +655,16 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: JSONException) {
 
                 }
+
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
 
             override fun onError(error: String) {
-                // Ignore error for non-critical feature
+                if (loadingContainer.visibility == android.view.View.VISIBLE) {
+                    onLoadingTaskComplete()
+                }
             }
         })
     }
@@ -701,8 +854,8 @@ class MainActivity : AppCompatActivity() {
 
                         // Restart data refresh after delay
                         mainHandler.postDelayed({
+                            showLoadingScreen()
                             loadInitialData()
-                            startDataRefresh()
                         }, 10000)
                     }
 
