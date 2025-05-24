@@ -1,5 +1,5 @@
 // In Arduino IDE go to Tools> MMU (It is after Debug Level)> Chnage to 16KB cache + 48KB IRAM(IRAM).
-// Either create a credentials.h file with the needed credentials or write the credentials directly into code as string.
+// Either create a credentials.h file with the needed credentials or hardcode the credentials directly into code as strings.
 #include "credentials.h"
 #include "DHT20.h"
 #include <Wire.h>
@@ -77,12 +77,12 @@ void loop() {
   
   if (now - lastProcessTime > 50) {
     checkTouchButton();
-    checkTimer();
     lastProcessTime = now;
   }
   
   if (now - lastDisplayTime > 2000) {
     updateDisplay();
+    checkTimer();
     lastDisplayTime = now;
   }
   
@@ -90,7 +90,7 @@ void loop() {
     handleSensorData();
     getClockSensorData();
     checkVOCLevels();
-    maintainWiFiConnection();
+    if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); }
     lastSensorTime = now;
   }
   
@@ -316,6 +316,14 @@ void handleSensorData() {
               - 0.05481717 * pow(avgHumid, 2) + 0.00122874 * pow(tempF, 2) * avgHumid
               + 0.00085282 * tempF * pow(avgHumid, 2)
               - 0.00000199 * pow(tempF, 2) * pow(avgHumid, 2);
+    if (avgHumid < 13.0 && tempF >= 80.0 && tempF <= 112.0) {
+        float adjustment = ((13.0 - avgHumid) / 4.0) * sqrt((17.0 - abs(tempF - 95.0)) / 17.0);
+        hiF -= adjustment;
+    }
+    if (avgHumid > 85.0 && tempF >= 80.0 && tempF <= 87.0) {
+        float adjustment = ((avgHumid - 85.0) / 10.0) * ((87.0 - tempF) / 5.0);
+        hiF += adjustment;
+    }
   avgHeatIndex = (hiF - 32) * 5.0 / 9.0;
   
   displayedPressure = remotePressure;
@@ -332,10 +340,11 @@ String getClockSensorData() {
     DynamicJsonDocument doc(256);
     deserializeJson(doc, response);
     
-    remoteTemp = doc["temperature"];
-    remoteHumid = doc["humidity"];
-    remotePressure = doc["pressure"];
-    remoteTVOC = doc["tvoc"];
+    // Only update if values are valid
+    if (doc.containsKey("temperature")) remoteTemp = doc["temperature"];
+    if (doc.containsKey("humidity")) remoteHumid = doc["humidity"];
+    if (doc.containsKey("pressure")) remotePressure = doc["pressure"];
+    if (doc.containsKey("tvoc")) remoteTVOC = doc["tvoc"];
   }
   return response;
 }
