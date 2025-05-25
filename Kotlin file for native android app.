@@ -1,28 +1,25 @@
 package com.example.nativeSmartHome
 
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.materialswitch.MaterialSwitch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
     // Network related
     private lateinit var client: OkHttpClient
-    private lateinit var executor: ExecutorService
-    private lateinit var mainHandler: Handler
-    private var deviceIP = "192.168.0.108" // Default IP, make configurable
+    private var deviceIP = "192.168.0.108"
     private lateinit var baseUrl: String
 
     // Loading screen elements
@@ -35,10 +32,10 @@ class MainActivity : AppCompatActivity() {
 
     // Loading state tracking
     private var completedTasks = 0
-    private val totalTasks = 6 // sensorData, deviceStates, timerStatus, vocControl, clockRelay, clockBrightness
+    private val totalTasks = 6
     private var allTasksCompleted = false
-    private val loadingUpdateInterval = 50L // 50ms for smooth animation
-    private lateinit var smoothLoadingRunnable: Runnable
+    private val loadingUpdateInterval = 50L
+    private var smoothLoadingJob: Job? = null
 
     // UI Elements - Sensor data
     private lateinit var tvIpAddress: TextView
@@ -77,9 +74,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var seekbarBrightness: SeekBar
     private lateinit var seekbarClockBrightness: SeekBar
 
-    // Data refresh handler
-    private lateinit var dataRefreshRunnable: Runnable
-    private val refreshInterval = 2000L // 2 seconds
+    // Coroutine jobs for managing async operations
+    private var sensorRefreshJob: Job? = null
+    private var deviceStateRefreshJob: Job? = null
+    private var timerRefreshJob: Job? = null
+    private var brightnessUpdateJob: Job? = null
+    private var clockBrightnessUpdateJob: Job? = null
+
+    // Debounce delays - shorter for more responsive UI
+    private val seekbarDebounceDelay = 150L
+    private val switchMutex = Mutex()
+
+    // Separate scopes for different update frequencies
+    private val fastUpdateScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val slowUpdateScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,39 +100,46 @@ class MainActivity : AppCompatActivity() {
         loadDeviceIP()
 
         showLoadingScreen()
-        loadInitialData()
+        loadInitialDataAsync()
     }
 
     override fun onResume() {
         super.onResume()
-        // Show loading screen when resuming if not already visible
         if (loadingContainer.visibility != android.view.View.VISIBLE) {
             showLoadingScreen()
-            loadInitialData()
+            loadInitialDataAsync()
         } else {
-            startDataRefresh()
+            startDataRefreshAsync()
         }
     }
 
     override fun onPause() {
         super.onPause()
-        stopDataRefresh()
+        stopAllJobs()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopDataRefresh()
-        executor.shutdown()
+        stopAllJobs()
+        fastUpdateScope.cancel()
+        slowUpdateScope.cancel()
+    }
+
+    private fun stopAllJobs() {
+        sensorRefreshJob?.cancel()
+        deviceStateRefreshJob?.cancel()
+        timerRefreshJob?.cancel()
+        smoothLoadingJob?.cancel()
+        brightnessUpdateJob?.cancel()
+        clockBrightnessUpdateJob?.cancel()
     }
 
     private fun initializeNetwork() {
         client = OkHttpClient.Builder()
-            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-            .writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-        executor = Executors.newFixedThreadPool(4)
-        mainHandler = Handler(Looper.getMainLooper())
         updateBaseUrl()
     }
 
@@ -191,9 +206,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLoadingScreen() {
         loadingContainer.visibility = android.view.View.VISIBLE
-        mainContent.visibility = android.view.View.GONE
+        mainContent.visibility = android.view.View.INVISIBLE
 
-        // Reset state
         completedTasks = 0
         allTasksCompleted = false
         loadingStartTime = System.currentTimeMillis()
@@ -202,17 +216,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startSmoothLoading() {
-        smoothLoadingRunnable = object : Runnable {
-            override fun run() {
+        smoothLoadingJob = lifecycleScope.launch {
+            while (isActive) {
                 val elapsed = System.currentTimeMillis() - loadingStartTime
 
                 val progress = when {
-                    elapsed < 2500 -> (elapsed * 80 / 2500).toInt() // 0-80% over 2.5 seconds
+                    elapsed < 1500 -> (elapsed * 80 / 1500).toInt()
                     allTasksCompleted -> {
-                        val completionElapsed = elapsed - 2500
-                        minOf(80 + (completionElapsed * 20 / 1000).toInt(), 100) // 80-100% over 1 second
+                        val completionElapsed = elapsed - 1500
+                        minOf(80 + (completionElapsed * 20 / 800).toInt(), 100)
                     }
-                    else -> 80 // Stay at 80%
+                    else -> 80
                 }
 
                 loadingProgressBar.progress = progress
@@ -220,33 +234,29 @@ class MainActivity : AppCompatActivity() {
 
                 val loadingMessages = arrayOf(
                     "Connecting to JARVIS...",
-                    "Loading sensor data...",
-                    "Fetching device states...",
-                    "Checking timers...",
-                    "Synchronizing settings..."
+                    "Loading sensors...",
+                    "Getting device states...",
+                    "Syncing data..."
                 )
 
                 when {
                     progress < 80 -> {
-                        val messageIndex = minOf(progress / 16, loadingMessages.size - 1)
+                        val messageIndex = minOf(progress / 20, loadingMessages.size - 1)
                         loadingText.text = loadingMessages[messageIndex]
-                        mainHandler.postDelayed(this, loadingUpdateInterval)
                     }
                     progress < 100 -> {
-                        if (allTasksCompleted) {
-                            loadingText.text = "Ready!"
-                        } else if (elapsed >= 10000) {
-                            loadingText.text = "Waiting for connection..."
-                        }
-                        mainHandler.postDelayed(this, loadingUpdateInterval)
+                        loadingText.text = if (allTasksCompleted) "Ready!" else "Finalizing..."
                     }
                     else -> {
-                        mainHandler.postDelayed({ hideLoadingScreen() }, 500)
+                        delay(300)
+                        hideLoadingScreen()
+                        break
                     }
                 }
+
+                delay(loadingUpdateInterval)
             }
         }
-        mainHandler.post(smoothLoadingRunnable)
     }
 
     private fun onLoadingTaskComplete() {
@@ -257,46 +267,106 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideLoadingScreen() {
-        mainHandler.removeCallbacks(smoothLoadingRunnable)
+        smoothLoadingJob?.cancel()
         loadingContainer.visibility = android.view.View.GONE
         mainContent.visibility = android.view.View.VISIBLE
-        startDataRefresh()
+        startDataRefreshAsync()
     }
 
     private fun setupEventListeners() {
-        // Device control switches
-        switchFan.setOnCheckedChangeListener { buttonView, _ ->
-            if (buttonView.isPressed) toggleDevice("fan")
-        }
-        switchBigLight.setOnCheckedChangeListener { buttonView, _ ->
-            if (buttonView.isPressed) toggleDevice("bigLight")
-        }
-        switchLight.setOnCheckedChangeListener { buttonView, _ ->
-            if (buttonView.isPressed) toggleDevice("light")
-        }
-        switchVocAuto.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (buttonView.isPressed) toggleVOCControl(isChecked)
-        }
-        switchClockRelay.setOnCheckedChangeListener { buttonView, isChecked ->
-            if (buttonView.isPressed) toggleClockRelay(isChecked)
+        // Ultra-fast switch responses with immediate UI feedback
+        switchFan.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                tvFanStatus.text = if (isChecked) "On" else "Off"
+
+                fastUpdateScope.launch {
+                    switchMutex.withLock {
+                        val success = toggleDeviceAsync("fan")
+                        if (!success) {
+                            withContext(Dispatchers.Main) {
+                                switchFan.isChecked = !isChecked
+                                tvFanStatus.text = if (!isChecked) "On" else "Off"
+                                showError("Failed to toggle fan")
+                            }
+                        }
+                        // Quick state refresh after 200ms
+                        delay(200)
+                        fetchDeviceStatesAsync()
+                    }
+                }
+            }
         }
 
-        // Settings switches
+        switchBigLight.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                tvBigLightStatus.text = if (isChecked) "On" else "Off"
+
+                fastUpdateScope.launch {
+                    switchMutex.withLock {
+                        val success = toggleDeviceAsync("bigLight")
+                        if (!success) {
+                            withContext(Dispatchers.Main) {
+                                switchBigLight.isChecked = !isChecked
+                                tvBigLightStatus.text = if (!isChecked) "On" else "Off"
+                                showError("Failed to toggle big light")
+                            }
+                        }
+                        delay(200)
+                        fetchDeviceStatesAsync()
+                    }
+                }
+            }
+        }
+
+        switchLight.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                tvLightStatus.text = if (isChecked) "On" else "Off"
+
+                fastUpdateScope.launch {
+                    switchMutex.withLock {
+                        val success = toggleDeviceAsync("light")
+                        if (!success) {
+                            withContext(Dispatchers.Main) {
+                                switchLight.isChecked = !isChecked
+                                tvLightStatus.text = if (!isChecked) "On" else "Off"
+                                showError("Failed to toggle light")
+                            }
+                        }
+                        delay(200)
+                        fetchDeviceStatesAsync()
+                    }
+                }
+            }
+        }
+
+        // Fast response switches
+        switchVocAuto.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                fastUpdateScope.launch { toggleVOCControlAsync(isChecked) }
+            }
+        }
+
+        switchClockRelay.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (buttonView.isPressed) {
+                fastUpdateScope.launch { toggleClockRelayAsync(isChecked) }
+            }
+        }
+
         switchAutoBrightness.setOnCheckedChangeListener { buttonView, isChecked ->
             if (buttonView.isPressed) {
-                toggleAutoBrightness(isChecked)
                 seekbarBrightness.isEnabled = !isChecked
+                fastUpdateScope.launch { toggleAutoBrightnessAsync(isChecked) }
             }
         }
 
         switchClockAutoBrightness.setOnCheckedChangeListener { buttonView, isChecked ->
             if (buttonView.isPressed) {
-                toggleClockAutoBrightness(isChecked)
                 seekbarClockBrightness.isEnabled = !isChecked
+                fastUpdateScope.launch { toggleClockAutoBrightnessAsync(isChecked) }
             }
         }
 
-        // Brightness controls
+        // Faster brightness controls
         seekbarBrightness.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -307,7 +377,13 @@ class MainActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                seekBar?.let { setBrightness(it.progress) }
+                seekBar?.let {
+                    brightnessUpdateJob?.cancel()
+                    brightnessUpdateJob = fastUpdateScope.launch {
+                        delay(seekbarDebounceDelay)
+                        setBrightnessAsync(it.progress)
+                    }
+                }
             }
         })
 
@@ -321,42 +397,27 @@ class MainActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                seekBar?.let { setClockBrightness(it.progress) }
+                seekBar?.let {
+                    clockBrightnessUpdateJob?.cancel()
+                    clockBrightnessUpdateJob = fastUpdateScope.launch {
+                        delay(seekbarDebounceDelay)
+                        setClockBrightnessAsync(it.progress)
+                    }
+                }
             }
         })
 
-        // Button listeners
-        btnStartTimer.setOnClickListener { startTimer() }
-        btnCancelTimer.setOnClickListener { cancelAllTimers() }
+        // Fast button responses
+        btnStartTimer.setOnClickListener {
+            fastUpdateScope.launch { startTimerAsync() }
+        }
+        btnCancelTimer.setOnClickListener {
+            fastUpdateScope.launch { cancelAllTimersAsync() }
+        }
         btnRestartDevice.setOnClickListener { restartDevice() }
     }
 
-    private fun showIPConfigDialog() {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("Configure Device IP")
-
-        val input = EditText(this)
-        input.setText(deviceIP)
-        builder.setView(input)
-
-        builder.setPositiveButton("OK") { _, _ ->
-            val newIP = input.text.toString().trim()
-            if (newIP.isNotEmpty()) {
-                deviceIP = newIP
-                updateBaseUrl()
-                saveDeviceIP()
-                showLoadingScreen()
-                loadInitialData()
-                Toast.makeText(this, "IP updated to: $deviceIP", Toast.LENGTH_SHORT).show()
-            }
-        }
-        builder.setNegativeButton("Cancel") { dialog, _ -> dialog.cancel() }
-
-        builder.show()
-    }
-
     private fun setupSpinners() {
-        // Timer device spinner
         val deviceAdapter = ArrayAdapter.createFromResource(
             this,
             R.array.timer_devices,
@@ -365,7 +426,6 @@ class MainActivity : AppCompatActivity() {
         deviceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerTimerDevice.adapter = deviceAdapter
 
-        // Timer state spinner - initially set for fan
         updateTimerStateSpinner("Fan")
 
         spinnerTimerDevice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -380,24 +440,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateTimerStateSpinner(device: String) {
         val stateAdapter = if (device == "Fan") {
-            ArrayAdapter.createFromResource(
-                this,
-                R.array.fan_states,
-                android.R.layout.simple_spinner_item
-            )
+            ArrayAdapter.createFromResource(this, R.array.fan_states, android.R.layout.simple_spinner_item)
         } else {
-            ArrayAdapter.createFromResource(
-                this,
-                R.array.light_states,
-                android.R.layout.simple_spinner_item
-            )
+            ArrayAdapter.createFromResource(this, R.array.light_states, android.R.layout.simple_spinner_item)
         }
         stateAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerTimerState.adapter = stateAdapter
     }
 
-    private fun loadInitialData() {
-        // Initialize with loading state
+    private fun loadInitialDataAsync() {
         tvIpAddress.text = "IP: $deviceIP"
         tvTemperature.text = "--°C"
         tvHumidity.text = "--%"
@@ -411,398 +462,322 @@ class MainActivity : AppCompatActivity() {
         tvLightStatus.text = "--"
         tvTimerStatus.text = "No active timers"
 
-        // Fetch initial data
-        fetchSensorData()
-        fetchDeviceStates()
-        fetchTimerStatus()
-        fetchVOCControlState()
-        fetchClockRelayState()
-        fetchClockBrightnessState()
+        // Parallel async loading for speed
+        fastUpdateScope.launch {
+            listOf(
+                async { fetchSensorDataAsync() },
+                async { fetchDeviceStatesAsync() },
+                async { fetchTimerStatusAsync() },
+                async { fetchVOCControlStateAsync() },
+                async { fetchClockRelayStateAsync() },
+                async { fetchClockBrightnessStateAsync() }
+            ).awaitAll()
+        }
     }
 
-    private fun startDataRefresh() {
-        dataRefreshRunnable = object : Runnable {
-            override fun run() {
-                fetchSensorData()
-                fetchDeviceStates()
-                fetchTimerStatus()
-                fetchVOCControlState()
-                fetchClockRelayState()
-                fetchClockBrightnessState()
-                mainHandler.postDelayed(this, refreshInterval)
+    private fun startDataRefreshAsync() {
+        // Sensor data refresh - 2 second interval
+        sensorRefreshJob = slowUpdateScope.launch {
+            while (isActive) {
+                fetchSensorDataAsync()
+                delay(2000)
             }
         }
-        mainHandler.post(dataRefreshRunnable)
-    }
 
-    private fun stopDataRefresh() {
-        if (::dataRefreshRunnable.isInitialized) {
-            mainHandler.removeCallbacks(dataRefreshRunnable)
+        // Device states refresh - 1 second for faster UI updates
+        deviceStateRefreshJob = fastUpdateScope.launch {
+            while (isActive) {
+                fetchDeviceStatesAsync()
+                delay(1000)
+            }
+        }
+
+        // Timer status refresh - 3 seconds (less critical)
+        timerRefreshJob = slowUpdateScope.launch {
+            while (isActive) {
+                async { fetchTimerStatusAsync() }
+                async { fetchVOCControlStateAsync() }
+                async { fetchClockRelayStateAsync() }
+                async { fetchClockBrightnessStateAsync() }
+                delay(3000)
+            }
         }
     }
 
-    // Network API methods
-    private fun makeGetRequest(endpoint: String, callback: ApiCallback) {
-        executor.execute {
+    // Optimized async network methods
+    private suspend fun makeGetRequestAsync(endpoint: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(baseUrl + endpoint)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                Result.success(responseBody)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}"))
+            }
+        } catch (e: IOException) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun makePostRequestAsync(endpoint: String, postData: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val body = RequestBody.create(
+                "application/x-www-form-urlencoded".toMediaType(),
+                postData
+            )
+
+            val request = Request.Builder()
+                .url(baseUrl + endpoint)
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                Result.success(responseBody)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}"))
+            }
+        } catch (e: IOException) {
+            Result.failure(e)
+        }
+    }
+
+    // Fast async data fetching methods
+    private suspend fun fetchSensorDataAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/sensorData")
+        result.onSuccess { response ->
             try {
-                val request = Request.Builder()
-                    .url(baseUrl + endpoint)
-                    .build()
+                val json = JSONObject(response)
+                tvTemperature.text = String.format("%.1f°C", json.getDouble("avgTemp"))
+                tvHumidity.text = String.format("%.1f%%", json.getDouble("avgHumid"))
+                tvHeatIndex.text = String.format("%.1f°C", json.getDouble("heatIndex"))
+                tvPressure.text = String.format("%.1fmmHg", json.getDouble("pressure"))
+                tvTvoc.text = "${json.getInt("tvoc")}ppb"
 
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val brightness = json.getInt("brightness")
+                tvBrightnessValue.text = "$brightness%"
+                if (!switchAutoBrightness.isPressed) seekbarBrightness.progress = brightness
 
-                mainHandler.post {
-                    if (response.isSuccessful) {
-                        callback.onSuccess(responseBody)
-                    } else {
-                        callback.onError("HTTP ${response.code}")
-                    }
-                }
-            } catch (e: IOException) {
-                mainHandler.post { callback.onError(e.message ?: "Network error") }
-            }
-        }
-    }
-
-    private fun makePostRequest(endpoint: String, postData: String, callback: ApiCallback) {
-        executor.execute {
-            try {
-                val body = RequestBody.create(
-                    "application/x-www-form-urlencoded".toMediaType(),
-                    postData
-                )
-
-                val request = Request.Builder()
-                    .url(baseUrl + endpoint)
-                    .post(body)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
-
-                mainHandler.post {
-                    if (response.isSuccessful) {
-                        callback.onSuccess(responseBody)
-                    } else {
-                        callback.onError("HTTP ${response.code}")
-                    }
-                }
-            } catch (e: IOException) {
-                mainHandler.post { callback.onError(e.message ?: "Network error") }
-            }
-        }
-    }
-
-    // Data fetching methods with loading tracking
-    private fun fetchSensorData() {
-        makeGetRequest("/sensorData", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                try {
-                    val json = JSONObject(response)
-                    tvTemperature.text = String.format("%.1f°C", json.getDouble("avgTemp"))
-                    tvHumidity.text = String.format("%.1f%%", json.getDouble("avgHumid"))
-                    tvHeatIndex.text = String.format("%.1f°C", json.getDouble("heatIndex"))
-                    tvPressure.text = String.format("%.1fmmHg", json.getDouble("pressure"))
-                    tvTvoc.text = "${json.getInt("tvoc")}ppb"
-
-                    val brightness = json.getInt("brightness")
-                    tvBrightnessValue.text = "$brightness%"
-                    seekbarBrightness.progress = brightness
-
-                    val autoBrightness = json.getBoolean("autoBrightness")
+                val autoBrightness = json.getBoolean("autoBrightness")
+                if (!switchAutoBrightness.isPressed) {
                     switchAutoBrightness.isChecked = autoBrightness
                     seekbarBrightness.isEnabled = !autoBrightness
-                } catch (_: JSONException) {
-
                 }
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+            } catch (_: JSONException) {}
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    private fun fetchDeviceStates() {
-        makeGetRequest("/deviceStates", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                try {
-                    val json = JSONObject(response)
+    private suspend fun fetchDeviceStatesAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/deviceStates")
+        result.onSuccess { response ->
+            try {
+                val json = JSONObject(response)
 
+                if (!switchFan.isPressed) {
                     val fanState = json.getString("fan")
                     tvFanStatus.text = fanState
                     switchFan.isChecked = !fanState.contains("Off")
+                }
 
+                if (!switchBigLight.isPressed) {
                     val bigLightState = json.getString("bigLight")
                     tvBigLightStatus.text = bigLightState
                     switchBigLight.isChecked = bigLightState == "On"
+                }
 
+                if (!switchLight.isPressed) {
                     val lightState = json.getString("light")
                     tvLightStatus.text = lightState
                     switchLight.isChecked = lightState == "On"
-                } catch (_: JSONException) {
-
                 }
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+            } catch (_: JSONException) {}
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    private fun fetchTimerStatus() {
-        makeGetRequest("/timer/status", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                try {
-                    val json = JSONObject(response)
-                    val hasActiveTimers = json.getBoolean("hasActiveTimers")
+    private suspend fun fetchTimerStatusAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/timer/status")
+        result.onSuccess { response ->
+            try {
+                val json = JSONObject(response)
+                val hasActiveTimers = json.getBoolean("hasActiveTimers")
 
-                    if (!hasActiveTimers) {
-                        tvTimerStatus.text = "No active timers"
-                    } else {
-                        val timers = json.getJSONArray("timers")
-                        val status = StringBuilder()
-                        for (i in 0 until timers.length()) {
-                            val timer = timers.getJSONObject(i)
-                            if (i > 0) status.append("\n")
-                            status.append(timer.getString("device"))
-                                .append(" → ")
-                                .append(timer.getString("targetState"))
-                                .append(" in ")
-                                .append(timer.getString("remainingTime"))
-                        }
-                        tvTimerStatus.text = status.toString()
+                if (!hasActiveTimers) {
+                    tvTimerStatus.text = "No active timers"
+                } else {
+                    val timers = json.getJSONArray("timers")
+                    val status = StringBuilder()
+                    for (i in 0 until timers.length()) {
+                        val timer = timers.getJSONObject(i)
+                        if (i > 0) status.append("\n")
+                        status.append(timer.getString("device"))
+                            .append(" → ")
+                            .append(timer.getString("targetState"))
+                            .append(" in ")
+                            .append(timer.getString("remainingTime"))
                     }
-                } catch (_: JSONException) {
-
+                    tvTimerStatus.text = status.toString()
                 }
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+            } catch (_: JSONException) {}
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    private fun fetchVOCControlState() {
-        makeGetRequest("/voc/auto", object : ApiCallback {
-            override fun onSuccess(response: String) {
+    private suspend fun fetchVOCControlStateAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/voc/auto")
+        result.onSuccess { response ->
+            if (!switchVocAuto.isPressed) {
                 switchVocAuto.isChecked = response.trim() == "on"
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
             }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    private fun fetchClockRelayState() {
-        makeGetRequest("/clock/relay/status", object : ApiCallback {
-            override fun onSuccess(response: String) {
+    private suspend fun fetchClockRelayStateAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/clock/relay/status")
+        result.onSuccess { response ->
+            if (!switchClockRelay.isPressed) {
                 switchClockRelay.isChecked = response.trim() == "ON"
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
             }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    private fun fetchClockBrightnessState() {
-        makeGetRequest("/clock/brightness", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                try {
-                    val json = JSONObject(response)
-                    val brightness = json.getInt("brightness")
-                    val auto = json.getBoolean("auto")
+    private suspend fun fetchClockBrightnessStateAsync() = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/clock/brightness")
+        result.onSuccess { response ->
+            try {
+                val json = JSONObject(response)
+                val brightness = json.getInt("brightness")
+                val auto = json.getBoolean("auto")
 
+                if (!switchClockAutoBrightness.isPressed) {
                     seekbarClockBrightness.progress = brightness
                     tvClockBrightnessValue.text = brightness.toString()
                     switchClockAutoBrightness.isChecked = auto
                     seekbarClockBrightness.isEnabled = !auto
-                } catch (_: JSONException) {
-
                 }
-
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-
-            override fun onError(error: String) {
-                if (loadingContainer.visibility == android.view.View.VISIBLE) {
-                    onLoadingTaskComplete()
-                }
-            }
-        })
+            } catch (_: JSONException) {}
+        }
+        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
-    // Device control methods
-    private fun toggleDevice(device: String) {
+    // Super fast device control methods
+    private suspend fun toggleDeviceAsync(device: String): Boolean {
         val endpoint = when (device) {
             "fan" -> "/fan/toggle"
             "bigLight" -> "/output/1/toggle"
             "light" -> "/output/2/toggle"
-            else -> return
+            else -> return false
         }
 
-        makeGetRequest(endpoint, object : ApiCallback {
-            override fun onSuccess(response: String) {
-                fetchDeviceStates() // Refresh state after toggle
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to toggle $device: $error")
-                fetchDeviceStates() // Refresh to restore correct state
-            }
-        })
+        return try {
+            val result = makeGetRequestAsync(endpoint)
+            result.isSuccess
+        } catch (e: Exception) {
+            false
+        }
     }
 
-    private fun toggleVOCControl(enabled: Boolean) {
-        makeGetRequest("/voc/auto?state=${if (enabled) "on" else "off"}", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                Toast.makeText(
-                    this@MainActivity,
-                    "VOC control ${if (enabled) "enabled" else "disabled"}",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to toggle VOC control: $error")
-                fetchVOCControlState() // Restore correct state
-            }
-        })
+    private suspend fun toggleVOCControlAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/voc/auto?state=${if (enabled) "on" else "off"}")
+        result.onSuccess {
+            Toast.makeText(
+                this@MainActivity,
+                "VOC control ${if (enabled) "enabled" else "disabled"}",
+                Toast.LENGTH_SHORT
+            ).show()
+        }.onFailure { error ->
+            showError("Failed to toggle VOC control: ${error.message}")
+            fetchVOCControlStateAsync()
+        }
     }
 
-    private fun toggleClockRelay(enabled: Boolean) {
-        makeGetRequest("/clock/relay?state=${if (enabled) "on" else "off"}", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Clock relay ${if (enabled) "on" else "off"}",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to toggle clock relay: $error")
-                fetchClockRelayState() // Restore correct state
-            }
-        })
+    private suspend fun toggleClockRelayAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/clock/relay?state=${if (enabled) "on" else "off"}")
+        result.onSuccess {
+            Toast.makeText(
+                this@MainActivity,
+                "Clock relay ${if (enabled) "on" else "off"}",
+                Toast.LENGTH_SHORT
+            ).show()
+        }.onFailure { error ->
+            showError("Failed to toggle clock relay: ${error.message}")
+            fetchClockRelayStateAsync()
+        }
     }
 
-    private fun toggleAutoBrightness(enabled: Boolean) {
-        makeGetRequest("/brightness/auto?state=${if (enabled) "true" else "false"}", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                seekbarBrightness.isEnabled = !enabled
-                if (enabled) {
-                    fetchSensorData() // Refresh to get updated brightness
-                }
+    private suspend fun toggleAutoBrightnessAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
+        val result = makeGetRequestAsync("/brightness/auto?state=${if (enabled) "true" else "false"}")
+        result.onSuccess {
+            seekbarBrightness.isEnabled = !enabled
+            if (enabled) {
+                delay(100)
+                fetchSensorDataAsync()
             }
-
-            override fun onError(error: String) {
-                showError("Failed to toggle auto brightness: $error")
-                fetchSensorData() // Restore correct state
-            }
-        })
+        }.onFailure { error ->
+            showError("Failed to toggle auto brightness: ${error.message}")
+            fetchSensorDataAsync()
+        }
     }
 
-    private fun toggleClockAutoBrightness(enabled: Boolean) {
-        makePostRequest("/clock/brightness/auto", "state=${if (enabled) "on" else "off"}", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                seekbarClockBrightness.isEnabled = !enabled
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to toggle clock auto brightness: $error")
-                fetchClockBrightnessState() // Restore correct state
-            }
-        })
+    private suspend fun toggleClockAutoBrightnessAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
+        val result = makePostRequestAsync("/clock/brightness/auto", "state=${if (enabled) "on" else "off"}")
+        result.onSuccess {
+            seekbarClockBrightness.isEnabled = !enabled
+        }.onFailure { error ->
+            showError("Failed to toggle clock auto brightness: ${error.message}")
+            fetchClockBrightnessStateAsync()
+        }
     }
 
-    private fun setBrightness(value: Int) {
-        makeGetRequest("/brightness?value=$value", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                // Success handled by UI update
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to set brightness: $error")
-                fetchSensorData() // Restore correct value
-            }
-        })
+    private suspend fun setBrightnessAsync(value: Int) {
+        val result = makeGetRequestAsync("/brightness?value=$value")
+        result.onFailure { error ->
+            showError("Failed to set brightness: ${error.message}")
+            fetchSensorDataAsync()
+        }
     }
 
-    private fun setClockBrightness(value: Int) {
-        makePostRequest("/clock/brightness", "value=$value", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                // Success handled by UI update
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to set clock brightness: $error")
-                fetchClockBrightnessState() // Restore correct value
-            }
-        })
+    private suspend fun setClockBrightnessAsync(value: Int) {
+        val result = makePostRequestAsync("/clock/brightness", "value=$value")
+        result.onFailure { error ->
+            showError("Failed to set clock brightness: ${error.message}")
+            fetchClockBrightnessStateAsync()
+        }
     }
 
-    // Timer methods
-    private fun startTimer() {
+    // Fast timer methods
+    private suspend fun startTimerAsync() = withContext(Dispatchers.Main) {
         val device = spinnerTimerDevice.selectedItem.toString()
         val state = spinnerTimerState.selectedItem.toString()
         val durationStr = etTimerDuration.text.toString()
 
         if (durationStr.isEmpty()) {
-            Toast.makeText(this, "Please enter a valid duration", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this@MainActivity, "Please enter a valid duration", Toast.LENGTH_SHORT).show()
+            return@withContext
         }
 
         val duration = try {
             durationStr.toInt()
         } catch (e: NumberFormatException) {
-            Toast.makeText(this, "Please enter a valid number", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this@MainActivity, "Please enter a valid number", Toast.LENGTH_SHORT).show()
+            return@withContext
         }
 
         if (duration < 1) {
-            Toast.makeText(this, "Duration must be at least 1 minute", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this@MainActivity, "Duration must be at least 1 minute", Toast.LENGTH_SHORT).show()
+            return@withContext
         }
 
-        // Convert spinner values to API format
         val deviceParam = when (device.lowercase().replace(" ", "")) {
             "biglight" -> "bigLight"
             else -> device.lowercase().replace(" ", "")
@@ -810,30 +785,26 @@ class MainActivity : AppCompatActivity() {
 
         val postData = "device=$deviceParam&state=$state&duration=$duration"
 
-        makePostRequest("/timer", postData, object : ApiCallback {
-            override fun onSuccess(response: String) {
-                Toast.makeText(this@MainActivity, "Timer started for $device", Toast.LENGTH_SHORT).show()
-                etTimerDuration.setText("") // Clear input
-                fetchTimerStatus() // Refresh timer display
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to start timer: $error")
-            }
-        })
+        val result = makePostRequestAsync("/timer", postData)
+        result.onSuccess {
+            Toast.makeText(this@MainActivity, "Timer started for $device", Toast.LENGTH_SHORT).show()
+            etTimerDuration.setText("")
+            delay(100)
+            fetchTimerStatusAsync()
+        }.onFailure { error ->
+            showError("Failed to start timer: ${error.message}")
+        }
     }
 
-    private fun cancelAllTimers() {
-        makePostRequest("/timer/cancel", "", object : ApiCallback {
-            override fun onSuccess(response: String) {
-                Toast.makeText(this@MainActivity, "All timers cancelled", Toast.LENGTH_SHORT).show()
-                fetchTimerStatus() // Refresh timer display
-            }
-
-            override fun onError(error: String) {
-                showError("Failed to cancel timers: $error")
-            }
-        })
+    private suspend fun cancelAllTimersAsync() = withContext(Dispatchers.Main) {
+        val result = makePostRequestAsync("/timer/cancel", "")
+        result.onSuccess {
+            Toast.makeText(this@MainActivity, "All timers cancelled", Toast.LENGTH_SHORT).show()
+            delay(100)
+            fetchTimerStatusAsync()
+        }.onFailure { error ->
+            showError("Failed to cancel timers: ${error.message}")
+        }
     }
 
     private fun restartDevice() {
@@ -841,28 +812,23 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Restart Device")
             .setMessage("Are you sure you want to restart JARVIS?")
             .setPositiveButton("Yes") { _, _ ->
-                makeGetRequest("/reset", object : ApiCallback {
-                    override fun onSuccess(response: String) {
+                fastUpdateScope.launch {
+                    val result = makeGetRequestAsync("/reset")
+                    result.onSuccess {
                         Toast.makeText(
                             this@MainActivity,
-                            "Device restart initiated. Reconnecting in 10 seconds...",
+                            "Device restart initiated. Reconnecting in 8 seconds...",
                             Toast.LENGTH_LONG
                         ).show()
 
-                        // Stop data refresh temporarily
-                        stopDataRefresh()
-
-                        // Restart data refresh after delay
-                        mainHandler.postDelayed({
-                            showLoadingScreen()
-                            loadInitialData()
-                        }, 10000)
+                        stopAllJobs()
+                        delay(8000)
+                        showLoadingScreen()
+                        loadInitialDataAsync()
+                    }.onFailure { error ->
+                        showError("Failed to restart device: ${error.message}")
                     }
-
-                    override fun onError(error: String) {
-                        showError("Failed to restart device: $error")
-                    }
-                })
+                }
             }
             .setNegativeButton("No", null)
             .show()
@@ -870,11 +836,5 @@ class MainActivity : AppCompatActivity() {
 
     private fun showError(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    // Callback interface for API responses
-    private interface ApiCallback {
-        fun onSuccess(response: String)
-        fun onError(error: String)
     }
 }
