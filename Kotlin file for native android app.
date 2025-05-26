@@ -1,6 +1,7 @@
 package com.example.nativeSmartHome
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -23,7 +24,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var baseUrl: String
 
     // Loading screen elements
-    private lateinit var loadingContainer: RelativeLayout
+    private lateinit var loadingContainer: LinearLayout
     private lateinit var loadingProgressBar: ProgressBar
     private lateinit var loadingPercentage: TextView
     private lateinit var loadingText: TextView
@@ -34,7 +35,6 @@ class MainActivity : AppCompatActivity() {
     private var completedTasks = 0
     private val totalTasks = 6
     private var allTasksCompleted = false
-    private val loadingUpdateInterval = 50L
     private var smoothLoadingJob: Job? = null
 
     // UI Elements - Sensor data
@@ -153,11 +153,6 @@ class MainActivity : AppCompatActivity() {
         updateBaseUrl()
     }
 
-    private fun saveDeviceIP() {
-        val prefs = getSharedPreferences("JARVIS_PREFS", MODE_PRIVATE)
-        prefs.edit().putString("device_ip", deviceIP).apply()
-    }
-
     private fun initializeViews() {
         // Loading screen elements
         loadingContainer = findViewById(R.id.loading_container)
@@ -191,6 +186,15 @@ class MainActivity : AppCompatActivity() {
         switchAutoBrightness = findViewById(R.id.switch_auto_brightness)
         switchClockAutoBrightness = findViewById(R.id.switch_clock_auto_brightness)
 
+        // Initial states
+        switchFan.isChecked = true
+        switchBigLight.isChecked = true
+        switchLight.isChecked = true
+        switchVocAuto.isChecked = true
+        switchClockRelay.isChecked = true
+        switchAutoBrightness.isChecked = true
+        switchClockAutoBrightness.isChecked = true
+
         // Timer controls
         spinnerTimerDevice = findViewById(R.id.spinner_timer_device)
         spinnerTimerState = findViewById(R.id.spinner_timer_state)
@@ -216,10 +220,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startSmoothLoading() {
+        val loadingMessages = arrayOf(
+            "Connecting to JARVIS...",
+            "Loading sensors...",
+            "Getting device states...",
+            "Syncing data..."
+        )
+
         smoothLoadingJob = lifecycleScope.launch {
+            var waitingMessageShown = false
+
             while (isActive) {
                 val elapsed = System.currentTimeMillis() - loadingStartTime
-
                 val progress = when {
                     elapsed < 1500 -> (elapsed * 80 / 1500).toInt()
                     allTasksCompleted -> {
@@ -232,32 +244,42 @@ class MainActivity : AppCompatActivity() {
                 loadingProgressBar.progress = progress
                 loadingPercentage.text = "$progress%"
 
-                val loadingMessages = arrayOf(
-                    "Connecting to JARVIS...",
-                    "Loading sensors...",
-                    "Getting device states...",
-                    "Syncing data..."
-                )
-
-                when {
-                    progress < 80 -> {
-                        val messageIndex = minOf(progress / 20, loadingMessages.size - 1)
-                        loadingText.text = loadingMessages[messageIndex]
-                    }
-                    progress < 100 -> {
-                        loadingText.text = if (allTasksCompleted) "Ready!" else "Finalizing..."
-                    }
-                    else -> {
-                        delay(300)
-                        hideLoadingScreen()
-                        break
+                if (progress < 80) {
+                    val messageIndex = minOf(progress / 20, loadingMessages.size - 1)
+                    loadingText.text = loadingMessages[messageIndex]
+                } else {
+                    if (allTasksCompleted) {
+                        loadingText.text = "Ready!"
+                    } else if (elapsed > 5000 && !waitingMessageShown) {
+                        loadingText.text = "Waiting for connection..."
+                        retryLoadingInitialData()
+                        waitingMessageShown = true
+                    } else if (!waitingMessageShown) {
+                        loadingText.text = "Finalizing..."
                     }
                 }
 
-                delay(loadingUpdateInterval)
+                if (progress == 100 && allTasksCompleted) {
+                    delay(300)
+                    hideLoadingScreen()
+                    break
+                }
+
+                delay(100)
             }
         }
     }
+
+    private fun retryLoadingInitialData() {
+        fastUpdateScope.launch {
+            delay(3000) // retry delay
+            if (!allTasksCompleted && loadingContainer.visibility == android.view.View.VISIBLE) {
+                loadInitialDataAsync()
+            }
+        }
+    }
+
+
 
     private fun onLoadingTaskComplete() {
         completedTasks++
@@ -289,8 +311,7 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle fan")
                             }
                         }
-                        // Quick state refresh after 200ms
-                        delay(200)
+                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -311,7 +332,7 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle big light")
                             }
                         }
-                        delay(200)
+                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -332,7 +353,7 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle light")
                             }
                         }
-                        delay(200)
+                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -484,22 +505,22 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Device states refresh - 1 second for faster UI updates
+        // Device states refresh - 100ms for faster UI updates
         deviceStateRefreshJob = fastUpdateScope.launch {
             while (isActive) {
                 fetchDeviceStatesAsync()
-                delay(1000)
+                delay(100)
             }
         }
 
-        // Timer status refresh - 3 seconds (less critical)
+        // Timer status refresh - 10 seconds (less critical)
         timerRefreshJob = slowUpdateScope.launch {
             while (isActive) {
                 async { fetchTimerStatusAsync() }
                 async { fetchVOCControlStateAsync() }
                 async { fetchClockRelayStateAsync() }
                 async { fetchClockBrightnessStateAsync() }
-                delay(3000)
+                delay(10000)
             }
         }
     }
@@ -550,6 +571,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Fast async data fetching methods
+    // Modified fetchSensorDataAsync
     private suspend fun fetchSensorDataAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/sensorData")
         result.onSuccess { response ->
@@ -570,11 +592,15 @@ class MainActivity : AppCompatActivity() {
                     switchAutoBrightness.isChecked = autoBrightness
                     seekbarBrightness.isEnabled = !autoBrightness
                 }
-            } catch (_: JSONException) {}
+                Log.d("MainActivity", "Sensor data valid")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } catch (e: JSONException) {
+                Log.e("MainActivity", "Sensor data parse error", e)
+            }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
+    // Modified fetchDeviceStatesAsync
     private suspend fun fetchDeviceStatesAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/deviceStates")
         result.onSuccess { response ->
@@ -598,11 +624,15 @@ class MainActivity : AppCompatActivity() {
                     tvLightStatus.text = lightState
                     switchLight.isChecked = lightState == "On"
                 }
-            } catch (_: JSONException) {}
+                Log.d("MainActivity", "Device states valid")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } catch (e: JSONException) {
+                Log.e("MainActivity", "Device states parse error", e)
+            }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
+    // Modified fetchTimerStatusAsync
     private suspend fun fetchTimerStatusAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/timer/status")
         result.onSuccess { response ->
@@ -626,31 +656,49 @@ class MainActivity : AppCompatActivity() {
                     }
                     tvTimerStatus.text = status.toString()
                 }
-            } catch (_: JSONException) {}
+                Log.d("MainActivity", "Timer status valid")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } catch (e: JSONException) {
+                Log.e("MainActivity", "Timer status parse error", e)
+            }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
+    // Modified fetchVOCControlStateAsync
     private suspend fun fetchVOCControlStateAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/voc/auto")
         result.onSuccess { response ->
-            if (!switchVocAuto.isPressed) {
-                switchVocAuto.isChecked = response.trim() == "on"
+            val state = response.trim()
+            if (state == "on" || state == "off") {
+                if (!switchVocAuto.isPressed) {
+                    switchVocAuto.isChecked = state == "on"
+                }
+                Log.d("MainActivity", "VOC control valid: $state")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } else {
+                Log.e("MainActivity", "Invalid VOC state: $state")
             }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
+    // Modified fetchClockRelayStateAsync
     private suspend fun fetchClockRelayStateAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/clock/relay/status")
         result.onSuccess { response ->
-            if (!switchClockRelay.isPressed) {
-                switchClockRelay.isChecked = response.trim() == "ON"
+            val state = response.trim()
+            if (state == "ON" || state == "OFF") {
+                if (!switchClockRelay.isPressed) {
+                    switchClockRelay.isChecked = state == "ON"
+                }
+                Log.d("MainActivity", "Clock relay valid: $state")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } else {
+                Log.e("MainActivity", "Invalid relay state: $state")
             }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
+    // Modified fetchClockBrightnessStateAsync
     private suspend fun fetchClockBrightnessStateAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/clock/brightness")
         result.onSuccess { response ->
@@ -665,9 +713,12 @@ class MainActivity : AppCompatActivity() {
                     switchClockAutoBrightness.isChecked = auto
                     seekbarClockBrightness.isEnabled = !auto
                 }
-            } catch (_: JSONException) {}
+                Log.d("MainActivity", "Clock brightness valid")
+                if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
+            } catch (e: JSONException) {
+                Log.e("MainActivity", "Clock brightness parse error", e)
+            }
         }
-        if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
     }
 
     // Super fast device control methods
