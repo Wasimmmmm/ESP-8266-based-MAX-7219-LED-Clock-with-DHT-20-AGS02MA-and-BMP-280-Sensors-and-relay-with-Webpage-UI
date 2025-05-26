@@ -75,8 +75,9 @@ void loop() {
   
   unsigned long now = millis();
   
-  if (now - lastProcessTime > 50) {
+  if (now - lastProcessTime > 200) {
     checkTouchButton();
+    checkVOCLevels();
     lastProcessTime = now;
   }
   
@@ -89,7 +90,6 @@ void loop() {
   if (now - lastSensorTime > 10000) {
     handleSensorData();
     getClockSensorData();
-    checkVOCLevels();
     if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); }
     lastSensorTime = now;
   }
@@ -288,7 +288,7 @@ void checkTimer() {
 void checkVOCLevels() {
   if (!autoVOCControl) return;
   
-  bool shouldActivate = (remoteTVOC >= 1500 || avgHeatIndex >= 40);
+  bool shouldActivate = (remoteTVOC >= 1500 || avgHeatIndex >= 45);
   
   if (shouldActivate && !relayTriggeredByVOC) {
     controlClockRelay(true);
