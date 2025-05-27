@@ -52,13 +52,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLightStatus: TextView
     private lateinit var tvTimerStatus: TextView
     private lateinit var tvClockBrightnessValue: TextView
+    private lateinit var tvExhaust: TextView
+    private lateinit var tvVocStatus: TextView
 
     // UI Elements - Switches
     private lateinit var switchFan: MaterialSwitch
     private lateinit var switchBigLight: MaterialSwitch
     private lateinit var switchLight: MaterialSwitch
     private lateinit var switchVocAuto: MaterialSwitch
-    private lateinit var switchClockRelay: MaterialSwitch
+    private lateinit var exhaustFan: MaterialSwitch
     private lateinit var switchAutoBrightness: MaterialSwitch
     private lateinit var switchClockAutoBrightness: MaterialSwitch
 
@@ -176,13 +178,16 @@ class MainActivity : AppCompatActivity() {
         tvLightStatus = findViewById(R.id.tv_light_status)
         tvTimerStatus = findViewById(R.id.tv_timer_status)
         tvClockBrightnessValue = findViewById(R.id.tv_clock_brightness_value)
+        tvExhaust = findViewById(R.id.tv_exhaust_status)
+        tvVocStatus = findViewById(R.id.tv_voc_status)
+
 
         // Switches
         switchFan = findViewById(R.id.switch_fan)
         switchBigLight = findViewById(R.id.switch_big_light)
         switchLight = findViewById(R.id.switch_light)
         switchVocAuto = findViewById(R.id.switch_voc_auto)
-        switchClockRelay = findViewById(R.id.switch_clock_relay)
+        exhaustFan = findViewById(R.id.exhaust_fan)
         switchAutoBrightness = findViewById(R.id.switch_auto_brightness)
         switchClockAutoBrightness = findViewById(R.id.switch_clock_auto_brightness)
 
@@ -191,7 +196,7 @@ class MainActivity : AppCompatActivity() {
         switchBigLight.isChecked = true
         switchLight.isChecked = true
         switchVocAuto.isChecked = true
-        switchClockRelay.isChecked = true
+        exhaustFan.isChecked = true
         switchAutoBrightness.isChecked = true
         switchClockAutoBrightness.isChecked = true
 
@@ -311,7 +316,6 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle fan")
                             }
                         }
-                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -332,7 +336,6 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle big light")
                             }
                         }
-                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -353,7 +356,6 @@ class MainActivity : AppCompatActivity() {
                                 showError("Failed to toggle light")
                             }
                         }
-                        delay(100)
                         fetchDeviceStatesAsync()
                     }
                 }
@@ -363,13 +365,41 @@ class MainActivity : AppCompatActivity() {
         // Fast response switches
         switchVocAuto.setOnCheckedChangeListener { buttonView, isChecked ->
             if (buttonView.isPressed) {
-                fastUpdateScope.launch { toggleVOCControlAsync(isChecked) }
+                tvVocStatus.text = if (isChecked) "On" else "Off"
+
+                fastUpdateScope.launch {
+                    switchMutex.withLock {
+                        val success = toggleVOCControlAsync(isChecked)
+                        if (!success) {
+                            withContext(Dispatchers.Main) {
+                                switchVocAuto.isChecked = !isChecked
+                                tvVocStatus.text = if (!isChecked) "On" else "Off"
+                                showError("Failed to toggle VOC control")
+                            }
+                        }
+                        fetchVOCControlStateAsync()
+                    }
+                }
             }
         }
 
-        switchClockRelay.setOnCheckedChangeListener { buttonView, isChecked ->
+        exhaustFan.setOnCheckedChangeListener { buttonView, isChecked ->
             if (buttonView.isPressed) {
-                fastUpdateScope.launch { toggleClockRelayAsync(isChecked) }
+                tvExhaust.text = if (isChecked) "On" else "Off"
+
+                fastUpdateScope.launch {
+                    switchMutex.withLock {
+                        val success = toggleClockRelayAsync(isChecked)
+                        if (!success) {
+                            withContext(Dispatchers.Main) {
+                                exhaustFan.isChecked = !isChecked
+                                tvExhaust.text = if (!isChecked) "On" else "Off"
+                                showError("Failed to toggle exhaust fan")
+                            }
+                        }
+                        fetchClockRelayStateAsync()
+                    }
+                }
             }
         }
 
@@ -481,6 +511,8 @@ class MainActivity : AppCompatActivity() {
         tvFanStatus.text = "--"
         tvBigLightStatus.text = "--"
         tvLightStatus.text = "--"
+        tvVocStatus.text = "--"
+        tvExhaust.text = "--"
         tvTimerStatus.text = "No active timers"
 
         // Parallel async loading for speed
@@ -505,11 +537,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Device states refresh - 100ms for faster UI updates
         deviceStateRefreshJob = fastUpdateScope.launch {
             while (isActive) {
                 fetchDeviceStatesAsync()
-                delay(100)
+                delay(1000)
             }
         }
 
@@ -592,7 +623,6 @@ class MainActivity : AppCompatActivity() {
                     switchAutoBrightness.isChecked = autoBrightness
                     seekbarBrightness.isEnabled = !autoBrightness
                 }
-                Log.d("MainActivity", "Sensor data valid")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } catch (e: JSONException) {
                 Log.e("MainActivity", "Sensor data parse error", e)
@@ -624,7 +654,6 @@ class MainActivity : AppCompatActivity() {
                     tvLightStatus.text = lightState
                     switchLight.isChecked = lightState == "On"
                 }
-                Log.d("MainActivity", "Device states valid")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } catch (e: JSONException) {
                 Log.e("MainActivity", "Device states parse error", e)
@@ -656,7 +685,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     tvTimerStatus.text = status.toString()
                 }
-                Log.d("MainActivity", "Timer status valid")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } catch (e: JSONException) {
                 Log.e("MainActivity", "Timer status parse error", e)
@@ -664,7 +692,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Modified fetchVOCControlStateAsync
     private suspend fun fetchVOCControlStateAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/voc/auto")
         result.onSuccess { response ->
@@ -672,28 +699,37 @@ class MainActivity : AppCompatActivity() {
             if (state == "on" || state == "off") {
                 if (!switchVocAuto.isPressed) {
                     switchVocAuto.isChecked = state == "on"
+                    tvVocStatus.text = "${getString(R.string.activates_exhaust_fan_auto)} ${if (state == "on") "On" else "Off"}"
                 }
-                Log.d("MainActivity", "VOC control valid: $state")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } else {
                 Log.e("MainActivity", "Invalid VOC state: $state")
             }
+        }.onFailure { error ->
+            Log.e("MainActivity", "Failed to fetch VOC state: ${error.message}")
+            if (!switchVocAuto.isPressed) {
+                tvVocStatus.text = "--"
+            }
         }
     }
 
-    // Modified fetchClockRelayStateAsync
     private suspend fun fetchClockRelayStateAsync() = withContext(Dispatchers.Main) {
         val result = makeGetRequestAsync("/clock/relay/status")
         result.onSuccess { response ->
             val state = response.trim()
             if (state == "ON" || state == "OFF") {
-                if (!switchClockRelay.isPressed) {
-                    switchClockRelay.isChecked = state == "ON"
+                if (!exhaustFan.isPressed) {
+                    exhaustFan.isChecked = state == "ON"
+                    tvExhaust.text = if (state == "ON") "On" else "Off"
                 }
-                Log.d("MainActivity", "Clock relay valid: $state")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } else {
                 Log.e("MainActivity", "Invalid relay state: $state")
+            }
+        }.onFailure { error ->
+            Log.e("MainActivity", "Failed to fetch relay state: ${error.message}")
+            if (!exhaustFan.isPressed) {
+                tvExhaust.text = "--"
             }
         }
     }
@@ -713,7 +749,6 @@ class MainActivity : AppCompatActivity() {
                     switchClockAutoBrightness.isChecked = auto
                     seekbarClockBrightness.isEnabled = !auto
                 }
-                Log.d("MainActivity", "Clock brightness valid")
                 if (loadingContainer.visibility == android.view.View.VISIBLE) onLoadingTaskComplete()
             } catch (e: JSONException) {
                 Log.e("MainActivity", "Clock brightness parse error", e)
@@ -738,31 +773,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun toggleVOCControlAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
-        val result = makeGetRequestAsync("/voc/auto?state=${if (enabled) "on" else "off"}")
-        result.onSuccess {
-            Toast.makeText(
-                this@MainActivity,
-                "VOC control ${if (enabled) "enabled" else "disabled"}",
-                Toast.LENGTH_SHORT
-            ).show()
-        }.onFailure { error ->
-            showError("Failed to toggle VOC control: ${error.message}")
-            fetchVOCControlStateAsync()
+    private suspend fun toggleVOCControlAsync(enabled: Boolean): Boolean {
+        return try {
+            val result = makeGetRequestAsync("/voc/auto?state=${if (enabled) "on" else "off"}")
+            result.isSuccess
+        } catch (e: Exception) {
+            false
         }
     }
 
-    private suspend fun toggleClockRelayAsync(enabled: Boolean) = withContext(Dispatchers.Main) {
-        val result = makeGetRequestAsync("/clock/relay?state=${if (enabled) "on" else "off"}")
-        result.onSuccess {
-            Toast.makeText(
-                this@MainActivity,
-                "Clock relay ${if (enabled) "on" else "off"}",
-                Toast.LENGTH_SHORT
-            ).show()
-        }.onFailure { error ->
-            showError("Failed to toggle clock relay: ${error.message}")
-            fetchClockRelayStateAsync()
+    private suspend fun toggleClockRelayAsync(enabled: Boolean): Boolean {
+        return try {
+            val result = makeGetRequestAsync("/clock/relay?state=${if (enabled) "on" else "off"}")
+            result.isSuccess
+        } catch (e: Exception) {
+            false
         }
     }
 
