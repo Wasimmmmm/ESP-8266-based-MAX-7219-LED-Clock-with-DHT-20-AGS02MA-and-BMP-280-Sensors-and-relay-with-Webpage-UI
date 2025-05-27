@@ -1,5 +1,4 @@
 #include <ESP8266WiFi.h>
-#include "credentials.h"
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
@@ -41,25 +40,34 @@ ESP8266WebServer server(80);
 // Sensor objects
 DHT20 dht20;
 AGS02MA ags;
-Adafruit_BMP280 bmp;
+Adafruit_BMP280 bmp; // BMP280 sensor
 
 // Variables for sensor readings
 float temperature = 0.0;
 float humidity = 0.0;
+float heatIndex = 0.0;
 uint32_t tvocPPB = 0;
 float pressure = 0.0;
 unsigned long lastSensorUpdate = 0;
+const long sensorUpdateInterval = 10000; // Update sensor readings every 10 seconds
 
 // Variables to store time components
+unsigned long epoch = 0;
 int hours = 0, minutes = 0, seconds = 0;
 unsigned long lastTimeUpdate = 0;
+const long timeUpdateInterval = 60000; // Update time from main device every minute
 unsigned long lastInternalUpdate = 0;
-char timeString[6];
-bool relayState = false;
-int currentBrightness = DAY_BRIGHTNESS;
-bool autoBrightness = true;
+const long internalUpdateInterval = 1000; // Internal time update every second
+char timeString[6]; // To store the formatted time string (HH:MM)
+bool relayState = false; // Track relay state
+int currentBrightness = DAY_BRIGHTNESS; // Track current brightness
+bool autoBrightness = true; // Track if auto brightness is enabled
 unsigned long lastReconnectTime = 0;
+
+// Variables for blinking colon
 bool colonVisible = true;
+unsigned long previousMillis = 0;
+const long blinkInterval = 1000; // Blink every 1000ms (1 second)
 
 void setup() {
   Serial.begin(115200);
@@ -154,7 +162,7 @@ void setup() {
   updateTimeDisplay();
   
   // Initial sensor readings
-  handleSensorData();
+  updateSensorReadings();
   
 }
 
@@ -162,6 +170,9 @@ void updateTimeFromMainDevice() {
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     HTTPClient http;
+    
+    // Connect to the main device time API
+    // Note: Use the actual IP of your main device
     http.begin(client, "http://192.168.4.1/api/time");
     
     int httpCode = http.GET();
@@ -172,13 +183,12 @@ void updateTimeFromMainDevice() {
       // Parse JSON response
       DynamicJsonDocument doc(128);
       DeserializationError error = deserializeJson(doc, payload);
-      
       hours = doc["hours"];
       minutes = doc["minutes"];
       seconds = doc["seconds"];
+    }
     
     http.end();
-    }
   }
 }
 
@@ -201,7 +211,7 @@ void updateInternalTime() {
   }
 }
 
-
+// New function to update the time display with or without colon based on blinking state
 void updateTimeDisplay() {
   if (colonVisible) {
     sprintf(timeString, "%02d:%02d", hours, minutes);  // Show time with colon
@@ -212,30 +222,34 @@ void updateTimeDisplay() {
 }
 
 void loop() {
+  maintainWiFiConnection();
+  // Handle OTA
   ArduinoOTA.handle();
+  
+  // Handle client requests
   server.handleClient();
 
+  
+  // Update sensor readings periodically
   unsigned long currentMillis = millis();
-  if (currentMillis - lastSensorUpdate >= 10000) {
-    if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); }
-    autoBrightnessSetting();
+  if (currentMillis - lastSensorUpdate >= sensorUpdateInterval) {
     lastSensorUpdate = currentMillis;
+    updateSensorReadings();
   }
-  if (currentMillis - lastTimeUpdate >= 3600000) {
-    updateTimeFromMainDevice();
+  if (currentMillis - lastTimeUpdate >= timeUpdateInterval) {
     lastTimeUpdate = currentMillis;
+    updateTimeFromMainDevice();
   }
-  if (currentMillis - lastInternalUpdate >= 1000) {
+  if (currentMillis - lastInternalUpdate >= internalUpdateInterval) {
+    lastInternalUpdate = currentMillis;
     updateInternalTime();
+    
+    // Toggle colon visibility
     colonVisible = !colonVisible;
     updateTimeDisplay();
-    lastInternalUpdate = currentMillis;
   }
-  
-}
-
-void autoBrightnessSetting(){
-    if (autoBrightness) {
+  // Update display brightness based on time if auto brightness is enabled
+  if (autoBrightness) {
     if (hours < 8 || hours > 22) {
       currentBrightness = NIGHT_BRIGHTNESS;
     } else {
@@ -243,16 +257,28 @@ void autoBrightnessSetting(){
     }
     P.setIntensity(currentBrightness);
   }
+  
 }
 
 // Update all sensor readings
 void updateSensorReadings() {
+  // Read temperature and humidity from DHT20
   if (dht20.read() == DHT20_OK) {
     temperature = dht20.getTemperature();
     humidity = dht20.getHumidity();
+  } else {
+    Serial.println("Failed to read from DHT20 sensor!");
   }
+  
+  // Read data from BMP280
   pressure = bmp.readPressure() / 133.3F; // Convert Pa to mmHg
+  
+  // Read TVOC from AGS02MA
   tvocPPB = ags.readPPB();
+  if (ags.lastError() == AGS02MA_OK) {
+  } else {
+    Serial.println("Failed to read from AGS02MA sensor!");
+  }
 }
 
 void handleRestart() {
@@ -400,11 +426,14 @@ void handleAutoBrightness() {
 }
 
 void handleSensorData() {
+  // Force update sensor readings before sending
   updateSensorReadings();
+  
   // Create JSON response with sensor data
   String json = "{";
   json += "\"temperature\":\"" + String(temperature, 1) + "\"";
   json += ",\"humidity\":\"" + String(humidity, 1) + "\"";
+  json += ",\"heatIndex\":\"" + String(heatIndex, 1) + "\"";
   json += ",\"tvoc\":\"" + String(tvocPPB) + "\"";
   json += ",\"pressure\":\"" + String(pressure, 1) + "\"";
   json += "}";
@@ -412,6 +441,15 @@ void handleSensorData() {
   server.send(200, "application/json", json);
 }
 
+void maintainWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastReconnectTime >= 10000) { // Attempt reconnect every 10 seconds
+      lastReconnectTime = currentMillis;
+      WiFi.reconnect();
+    }
+  }
+}
 
 void handleDeviceInfo() {
   // Create JSON response with device info
