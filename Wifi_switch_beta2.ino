@@ -18,7 +18,7 @@
 DHT20 DHT;
 ESP8266WebServer server(80);
 WiFiUDP udp;
-NTPClient timeClient(udp, "time.google.com", 19800, 3600000);
+NTPClient timeClient(udp, "time.google.com", 19800);
 U8G2_SSD1306_128X32_UNIVISION_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 enum DisplayMode { SHOW_AVG_TEMP, SHOW_AVG_HUMIDITY, SHOW_HEAT_INDEX, SHOW_PRESSURE, SHOW_TVOC };
@@ -75,9 +75,8 @@ void loop() {
   
   unsigned long now = millis();
   
-  if (now - lastProcessTime > 200) {
+  if (now - lastProcessTime > 50) {
     checkTouchButton();
-    checkVOCLevels();
     lastProcessTime = now;
   }
   
@@ -90,6 +89,7 @@ void loop() {
   if (now - lastSensorTime > 10000) {
     handleSensorData();
     getClockSensorData();
+    checkVOCLevels();
     if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); }
     lastSensorTime = now;
   }
@@ -433,11 +433,9 @@ void handleDeviceInfo() {
 }
 
 void handleTimeAPI() {
-  String json = "{\"epoch\":" + String(timeClient.getEpochTime()) + ","
-                "\"hours\":" + String(timeClient.getHours()) + ","
+  String json = "{\"hours\":" + String(timeClient.getHours()) + ","
                 "\"minutes\":" + String(timeClient.getMinutes()) + ","
-                "\"seconds\":" + String(timeClient.getSeconds()) + ","
-                "\"formattedTime\":\"" + timeClient.getFormattedTime() + "\"}";
+                "\"seconds\":" + String(timeClient.getSeconds()) + "\"}";
   server.send(200, "application/json", json);
 }
 
