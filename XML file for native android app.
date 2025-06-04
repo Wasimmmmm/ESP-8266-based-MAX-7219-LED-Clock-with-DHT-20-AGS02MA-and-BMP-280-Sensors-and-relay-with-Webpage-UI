@@ -1,101 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:context=".MainActivity">
-
-        <LinearLayout
-            android:id="@+id/loading_container"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_centerInParent="true"
-            android:background="@drawable/google_gradient_background"
-            android:orientation="vertical"
-            android:gravity="center">
-
-            <!-- JARVIS Logo/Title -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="JARVIS"
-                android:textSize="48sp"
-                android:textColor="#FFFFFF"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-light"
-                android:layout_marginBottom="32dp"
-                android:elevation="4dp" />
-
-            <!-- Loading Animation Container -->
-            <RelativeLayout
-                android:layout_width="180dp"
-                android:layout_height="180dp"
-                android:layout_marginBottom="24dp">
-
-                <!-- Outer Ring -->
-                <ProgressBar
-                    android:layout_width="180dp"
-                    android:layout_height="180dp"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:progressDrawable="@drawable/circular_progress_google"
-                    android:progress="100"
-                    android:layout_centerInParent="true"
-                    android:alpha="0.3" />
-
-                <!-- Inner Progress -->
-                <ProgressBar
-                    android:id="@+id/loading_progress_bar"
-                    android:layout_width="160dp"
-                    android:layout_height="160dp"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:progressDrawable="@drawable/circular_progress_google"
-                    android:progress="0"
-                    android:max="100"
-                    android:layout_centerInParent="true" />
-
-                <!-- Percentage Text -->
-                <TextView
-                    android:id="@+id/loading_percentage"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_centerInParent="true"
-                    android:text="0%"
-                    android:textSize="32sp"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold"
-                    android:fontFamily="sans-serif-medium" />
-
-            </RelativeLayout>
-
-            <!-- Loading Text -->
-            <TextView
-                android:id="@+id/loading_text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Connecting to JARVIS..."
-                android:textSize="18sp"
-                android:textColor="#E8EAED"
-                android:fontFamily="sans-serif"
-                android:gravity="center"
-                android:layout_marginTop="16dp" />
-
-        </LinearLayout>
-
-    <ScrollView
+    <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:app="http://schemas.android.com/apk/res-auto"
+        xmlns:tools="http://schemas.android.com/tools"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:id="@+id/main_content"
-        android:background="#f0f0f0"
+        android:background="?attr/colorSecondary"
         android:fillViewport="true"
         tools:context=".MainActivity">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp">
+            android:layout_margin="10dp"
+            android:orientation="vertical">
 
             <!-- Header Card -->
             <androidx.cardview.widget.CardView
@@ -144,225 +63,199 @@
                 app:cardElevation="4dp"
                 app:cardBackgroundColor="@android:color/white">
 
-                <LinearLayout
+                <androidx.constraintlayout.widget.ConstraintLayout
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical">
+                    android:layout_height="match_parent">
 
-                    <!-- Card Header -->
-                    <LinearLayout
+                    <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:id="@+id/tv_env_sensors"
+                        android:text="Environment Sensors"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintEnd_toEndOf="parent"
                         android:background="#2196F3"
-                        android:padding="12dp">
+                        android:padding="12dp"
+                        android:textColor="@android:color/white"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <!-- Temperature -->
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:id="@+id/temp_layout"
+                        android:layout_margin="5dp"
+                        app:layout_constraintBottom_toTopOf="@+id/pressureLayout"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toBottomOf="@+id/tv_env_sensors"
+                        app:layout_constraintEnd_toStartOf="@+id/humidLayout"
+                        android:background="#f8f9fa"
+                        android:orientation="vertical"
+                        android:padding="15dp"
+                        android:gravity="center">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Environment Sensors"
-                            android:textColor="@android:color/white"
-                            android:textSize="16sp"
+                            android:text="🌡️ Temp"
+                            android:textSize="12sp"
+                            android:textColor="#6c757d"
+                            android:gravity="center" />
+
+                        <TextView
+                            android:id="@+id/tv_temperature"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:text="--°C"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#343a40" />
+
+                    </LinearLayout>
+
+                    <!-- Humidity -->
+                    <LinearLayout
+                        android:id="@+id/humidLayout"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="5dp"
+                        android:background="#f8f9fa"
+                        android:gravity="center"
+                        android:orientation="vertical"
+                        android:padding="15dp"
+                        app:layout_constraintEnd_toStartOf="@+id/heatIndexLayout"
+                        app:layout_constraintStart_toEndOf="@+id/temp_layout"
+                        app:layout_constraintTop_toBottomOf="@+id/tv_env_sensors">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center"
+                            android:text="💧 Humidity"
+                            android:textColor="#6c757d"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/tv_humidity"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:text="--%"
+                            android:textColor="#343a40"
+                            android:textSize="18sp"
                             android:textStyle="bold" />
 
                     </LinearLayout>
 
-                    <!-- Sensor Grid -->
-                    <GridLayout
-                        android:layout_width="match_parent"
+                    <!-- Feels Like -->
+                    <LinearLayout
+                        android:id="@+id/heatIndexLayout"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_margin="15dp"
-                        android:columnCount="3"
-                        android:rowCount="2">
+                        app:layout_constraintBottom_toTopOf="@+id/tvocLayout"
+                        app:layout_constraintTop_toBottomOf="@+id/tv_env_sensors"
+                        app:layout_constraintStart_toEndOf="@+id/humidLayout"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        android:layout_margin="5dp"
+                        android:background="#f8f9fa"
+                        android:orientation="vertical"
+                        android:padding="15dp"
+                        android:gravity="center">
 
-                        <!-- Temperature -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:text="🔥 Feels Like"
+                            android:textSize="12sp"
+                            android:textColor="#6c757d"
+                            android:gravity="center" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🌡️ Temp"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
-
-                            <TextView
-                                android:id="@+id/tv_temperature"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--°C"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
-
-                        </LinearLayout>
-
-                        <!-- Humidity -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:id="@+id/tv_heat_index"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:layout_marginTop="5dp"
+                            android:text="--°C"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#343a40" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="💧 Humidity"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
+                    </LinearLayout>
 
-                            <TextView
-                                android:id="@+id/tv_humidity"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--%"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
+                    <!-- Pressure -->
+                    <LinearLayout
+                        android:id="@+id/pressureLayout"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        app:layout_constraintTop_toBottomOf="@+id/humidLayout"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintEnd_toStartOf="@+id/tvocLayout"
+                        android:layout_margin="5dp"
+                        android:background="#f8f9fa"
+                        android:orientation="vertical"
+                        android:padding="15dp"
+                        android:gravity="center">
 
-                        </LinearLayout>
-
-                        <!-- Feels Like -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:text="📡 Pressure"
+                            android:textSize="12sp"
+                            android:textColor="#6c757d"
+                            android:gravity="center" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🔥 Feels Like"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
-
-                            <TextView
-                                android:id="@+id/tv_heat_index"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--°C"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
-
-                        </LinearLayout>
-
-                        <!-- Pressure -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:id="@+id/tv_pressure"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:layout_marginTop="5dp"
+                            android:text="--mmHg"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#343a40" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="📡 Pressure"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
+                    </LinearLayout>
 
-                            <TextView
-                                android:id="@+id/tv_pressure"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--mmHg"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
+                    <!-- TVOC -->
+                    <LinearLayout
+                        android:id="@+id/tvocLayout"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        app:layout_constraintTop_toBottomOf="@+id/humidLayout"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintStart_toEndOf="@+id/pressureLayout"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        android:layout_margin="5dp"
+                        android:background="#f8f9fa"
+                        android:orientation="vertical"
+                        android:padding="15dp"
+                        android:gravity="center">
 
-                        </LinearLayout>
-
-                        <!-- TVOC -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:text="🌫️ TVOC"
+                            android:textSize="12sp"
+                            android:textColor="#6c757d"
+                            android:gravity="center" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🌫️ TVOC"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
-
-                            <TextView
-                                android:id="@+id/tv_tvoc"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--ppb"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
-
-                        </LinearLayout>
-
-                        <!-- Display -->
-                        <LinearLayout
-                            android:layout_width="0dp"
+                        <TextView
+                            android:id="@+id/tv_tvoc"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_columnWeight="1"
-                            android:layout_margin="5dp"
-                            android:background="#f8f9fa"
-                            android:orientation="vertical"
-                            android:padding="15dp"
-                            android:gravity="center">
+                            android:layout_marginTop="5dp"
+                            android:text="--ppb"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#343a40" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="💻 Display"
-                                android:textSize="12sp"
-                                android:textColor="#6c757d"
-                                android:gravity="center" />
+                    </LinearLayout>
 
-                            <TextView
-                                android:id="@+id/tv_brightness_value"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="5dp"
-                                android:text="--%"
-                                android:textSize="18sp"
-                                android:textStyle="bold"
-                                android:textColor="#343a40" />
-
-                        </LinearLayout>
-
-                    </GridLayout>
-
-                </LinearLayout>
+                </androidx.constraintlayout.widget.ConstraintLayout>
 
             </androidx.cardview.widget.CardView>
 
@@ -442,11 +335,6 @@
                                 android:layout_height="wrap_content" />
 
                         </LinearLayout>
-
-                        <View
-                            android:layout_width="match_parent"
-                            android:layout_height="1dp"
-                            android:background="#eeeeee" />
 
                         <!-- Big Light Control -->
                         <LinearLayout
@@ -533,11 +421,6 @@
 
                         </LinearLayout>
 
-                        <View
-                            android:layout_width="match_parent"
-                            android:layout_height="1dp"
-                            android:background="#eeeeee" />
-
                         <!-- Auto VOC Control -->
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -563,8 +446,10 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
+                                    android:id="@+id/tv_voc_status"
                                     android:layout_marginTop="4dp"
-                                    android:text="Activates exhaust fan at 1500ppb or feels like 45°C"
+                                    android:layout_marginEnd="5dp"
+                                    android:text="--"
                                     android:textSize="12sp"
                                     android:textColor="#6c757d" />
 
@@ -582,7 +467,7 @@
                             android:layout_height="1dp"
                             android:background="#eeeeee" />
 
-                        <!-- Clock Relay -->
+
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -600,22 +485,23 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:textColor="@color/black"
-                                    android:text="⏰ Clock Relay"
+                                    android:text="🌀 Exhaust Fan"
                                     android:textSize="16sp"
                                     android:textStyle="bold" />
 
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
+                                    android:id="@+id/tv_exhaust_status"
                                     android:layout_marginTop="4dp"
-                                    android:text="Remote device control"
+                                    android:text="--"
                                     android:textSize="12sp"
                                     android:textColor="#6c757d" />
 
                             </LinearLayout>
 
                             <com.google.android.material.materialswitch.MaterialSwitch
-                                android:id="@+id/switch_clock_relay"
+                                android:id="@+id/exhaust_fan"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content" />
 
@@ -811,6 +697,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:textColor="@color/black"
+
                                 android:text="🤖 Auto Brightness"
                                 android:textSize="16sp"
                                 android:textStyle="bold" />
@@ -829,14 +716,32 @@
                             android:orientation="vertical"
                             android:layout_marginVertical="15dp">
 
-                            <TextView
-                                android:layout_width="wrap_content"
+                            <LinearLayout
+                                android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:textColor="@color/black"
-                                android:text="🔆 Display Brightness"
-                                android:textSize="16sp"
-                                android:textStyle="bold"
-                                android:layout_marginBottom="10dp" />
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical"
+                                android:layout_marginBottom="10dp">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:textColor="@color/black"
+                                    android:text="🔆 Display Brightness"
+                                    android:textSize="16sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tv_brightness_value"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="--"
+                                    android:textSize="16sp"
+                                    android:textStyle="bold"
+                                    android:textColor="#2196F3" />
+
+                            </LinearLayout>
 
                             <SeekBar
                                 android:id="@+id/seekbar_brightness"
@@ -900,7 +805,7 @@
                                     android:id="@+id/tv_clock_brightness_value"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="5"
+                                    android:text="--"
                                     android:textSize="16sp"
                                     android:textStyle="bold"
                                     android:textColor="#2196F3" />
@@ -934,20 +839,7 @@
                 </LinearLayout>
 
             </androidx.cardview.widget.CardView>
-
-            <!-- Footer -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:text="JARVIS Smart Home Control System"
-                android:textSize="12sp"
-                android:textColor="#6c757d"
-                android:gravity="center"
-                android:padding="10dp" />
-
         </LinearLayout>
 
-    </ScrollView>
-</RelativeLayout>
+</ScrollView>
 
