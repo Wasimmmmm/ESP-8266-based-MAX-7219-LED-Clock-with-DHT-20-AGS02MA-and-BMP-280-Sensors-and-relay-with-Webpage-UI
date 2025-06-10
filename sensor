@@ -1,0 +1,177 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoOTA.h>
+#include <Wire.h>
+#include <DHT20.h>
+#include <AGS02MA.h>
+#include <Adafruit_BMP280.h>
+#include <ArduinoJson.h>
+
+// OTA settings
+const char* hostname = "ESP-Sensor";
+
+// Set up ESP8266 web server
+ESP8266WebServer server(80);
+
+// Sensor objects
+DHT20 dht20;
+AGS02MA ags;
+Adafruit_BMP280 bmp;
+
+// Variables for sensor readings
+float temperature = 0.0;
+float humidity = 0.0;
+uint32_t tvocPPB = 0;
+float pressure = 0.0;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize I2C for sensors
+  Wire.begin(D2, D1); // SDA=D2, SCL=D1
+  Wire.setClock(30000); // Set to 30 KHz for AGS02MA compatibility
+  
+  // Initialize sensors
+  Serial.println("Initializing sensors...");
+  dht20.begin();
+  bmp.begin(0x76); 
+  
+  if (!ags.begin()) {
+    Serial.println("Failed to initialize AGS02MA!");
+  } else {
+    ags.setI2CResetSpeed(100000); // Reset to 100KHz after operations
+  }
+  
+  // Connect to WiFi
+  WiFi.begin("Network", "networkki");
+  WiFi.config(IPAddress(192,168,0,115), WiFi.gatewayIP(), WiFi.subnetMask());
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  
+  // Set up OTA
+  setupOTA();
+  
+  // Set up web server routes for sensor data
+  server.on("/sensor/data", handleSensorData);
+  server.on("/device/info", handleDeviceInfo);
+  server.on("/device/restart", handleRestart);
+  
+  // Start the server
+  server.begin();
+  Serial.println("HTTP server started");
+  
+  Serial.println("Sensor HTTP Server Ready!");
+}
+
+void loop() {
+  // Handle OTA and web server
+  ArduinoOTA.handle();
+  server.handleClient();
+  
+  // Maintain WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected, attempting reconnect...");
+    WiFi.reconnect();
+  }
+}
+
+// Update all sensor readings
+void updateSensorReadings() {
+  // Read temperature and humidity from DHT20
+  if (dht20.read() == DHT20_OK) {
+    temperature = dht20.getTemperature();
+    humidity = dht20.getHumidity();
+  } else {
+    Serial.println("Failed to read from DHT20 sensor!");
+  }
+  
+  // Read data from BMP280
+  pressure = bmp.readPressure() / 133.3F; // Convert Pa to mmHg
+  
+  // Read TVOC from AGS02MA
+  tvocPPB = ags.readPPB();
+  if (ags.lastError() != AGS02MA_OK) {
+    Serial.println("Failed to read from AGS02MA sensor!");
+  }
+}
+
+// Set up OTA functionality
+void setupOTA() {
+  ArduinoOTA.setHostname(hostname);
+  ArduinoOTA.setPassword("SECRETOTAPASS");
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {
+      type = "filesystem";
+    }
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nUpdate complete");
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("OTA ready");
+}
+
+// Web server handlers
+void handleSensorData() {
+  updateSensorReadings(); // Read fresh data on request
+  
+  StaticJsonDocument<256> doc;
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["pressure"] = pressure;
+  doc["tvoc"] = tvocPPB;
+  
+  String json;
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
+}
+
+void handleDeviceInfo() {
+  StaticJsonDocument<128> doc;
+  doc["hostname"] = hostname;
+  doc["ip"] = WiFi.localIP().toString();
+  
+  String json;
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
+}
+
+void handleRestart() {
+  server.send(200, "text/plain", "Restarting device...");
+  delay(1000);
+  ESP.restart();
+}
