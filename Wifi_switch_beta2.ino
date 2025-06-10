@@ -1,4 +1,4 @@
-// In Arduino IDE go to Tools> MMU (It is after Debug Level)> Chnage to 16KB cache + 48KB IRAM(IRAM).
+// In Arduino IDE go to Tools> MMU (It is after Debug Level)> Change to 16KB cache + 48KB IRAM(IRAM).
 // Either create a credentials.h file with the needed credentials or hardcode the credentials directly into code as strings.
 #include "credentials.h"
 #include "DHT20.h"
@@ -48,18 +48,38 @@ DeviceTimer deviceTimers[3]; // Fan, Big Light, Light
 const uint8_t touchPin = 13;  // D7
 const String clockIP = CLOCK_IP;
 
-// Timing variables
+// Timing variables with staggered intervals to prevent collision
 unsigned long lastSensorTime = 0, lastDisplayTime = 0, lastProcessTime = 0, 
-              lastBrightnessCheck = 0, lastReconnectTime = 0;
+              lastBrightnessCheck = 0, lastReconnectTime = 0, lastRemoteSensorTime = 0,
+              lastVOCCheckTime = 0, lastTimeUpdateTime = 0;
+
+// Non-blocking HTTP state management
+enum HttpState { HTTP_IDLE, HTTP_REQUESTING, HTTP_PROCESSING };
+struct HttpRequest {
+  HttpState state = HTTP_IDLE;
+  String url = "";
+  String method = "GET";
+  String postData = "";
+  unsigned long startTime = 0;
+  unsigned long timeout = 5000; // 5 second timeout
+  bool expectResponse = false;
+  String response = "";
+};
+
+HttpRequest remoteDataRequest;
+HttpRequest vocControlRequest;
+HttpRequest clockControlRequest;
 
 // Sensor & control variables
 float sensorTemperature = 0, sensorHumidity = 0, heatIndex = 0, 
       remoteTemp = 0, remoteHumid = 0, remotePressure = 0,
-      avgTemp = 0, avgHumid = 0, avgHeatIndex = 0, displayedPressure = 0;
+      avgTemp = 0, avgHumid = 0, avgHeatIndex = 0, displayedPressure = 0, displayedTVOC = 0;
 
-uint32_t remoteTVOC = 0, displayedTVOC = 0;
+uint32_t remoteTVOC = 0;
 uint8_t displayBrightness = 60;
 bool autoBrightness = true, autoVOCControl = true, relayTriggeredByVOC = false;
+bool pendingVOCAction = false;
+bool pendingVOCState = false;
 
 // ==================== SETUP ====================
 void setup() {
@@ -72,34 +92,143 @@ void setup() {
 void loop() {
   server.handleClient();
   ArduinoOTA.handle();
-  
+  // Handle non-blocking HTTP requests
+  processHttpRequests();
+
   unsigned long now = millis();
   
+  // High frequency tasks (50ms)
   if (now - lastProcessTime > 50) {
     checkTouchButton();
     lastProcessTime = now;
   }
   
-  if (now - lastDisplayTime > 2000) {
+  // Medium frequency tasks (3s) - staggered
+  if (now - lastDisplayTime > 3000) {
     updateDisplay();
     checkTimer();
     lastDisplayTime = now;
   }
   
+  // Local sensor reading (10s)
   if (now - lastSensorTime > 10000) {
-    handleSensorData();
-    getClockSensorData();
-    checkVOCLevels();
-    if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); }
+    handleLocalSensorData();
     lastSensorTime = now;
   }
   
+  // Remote sensor data (12s) - offset to avoid collision
+  if (now - lastRemoteSensorTime > 12000) {
+    requestRemoteSensorData();
+    lastRemoteSensorTime = now;
+  }
+  
+  // VOC level checking (8s) - different interval
+  if (now - lastVOCCheckTime > 8000) {
+    checkVOCLevelsNonBlocking();
+    lastVOCCheckTime = now;
+  }
+  
+  // Time update (60s)
+  if (now - lastTimeUpdateTime > 60000) {
+    timeClient.update();
+    lastTimeUpdateTime = now;
+  }
+  
+  // Brightness check (30s)
   if (autoBrightness && now - lastBrightnessCheck > 30000) {
     autoBrightnessCheck();
     lastBrightnessCheck = now;
   }
   
-  yield();
+  // WiFi reconnection check (15s) - different interval
+  if (now - lastReconnectTime > 15000) {
+    maintainWiFiConnection();
+    lastReconnectTime = now;
+  }
+  
+  yield(); // Allow ESP8266 to handle background tasks
+}
+
+// ==================== NON-BLOCKING HTTP MANAGEMENT ====================
+void processHttpRequests() {
+  // Process remote sensor data request
+  if (remoteDataRequest.state == HTTP_REQUESTING) {
+    processHttpRequest(&remoteDataRequest);
+    if (remoteDataRequest.state == HTTP_IDLE && !remoteDataRequest.response.isEmpty()) {
+      parseRemoteSensorData(remoteDataRequest.response);
+      remoteDataRequest.response = "";
+    }
+  }
+  
+  // Process VOC control request
+  if (vocControlRequest.state == HTTP_REQUESTING) {
+    processHttpRequest(&vocControlRequest);
+    if (vocControlRequest.state == HTTP_IDLE) {
+      pendingVOCAction = false;
+    }
+  }
+  
+  // Process clock control request
+  if (clockControlRequest.state == HTTP_REQUESTING) {
+    processHttpRequest(&clockControlRequest);
+    if (clockControlRequest.state == HTTP_IDLE) {
+      // Clock control completed
+    }
+  }
+}
+
+void processHttpRequest(HttpRequest* request) {
+  static WiFiClient client;
+  static HTTPClient http;
+  
+  if (millis() - request->startTime > request->timeout) {
+    // Timeout occurred
+    if (http.connected()) {
+      http.end();
+    }
+    request->state = HTTP_IDLE;
+    Serial.println("HTTP request timeout: " + request->url);
+    return;
+  }
+  
+  if (!http.connected()) {
+    // Start the request
+    if (!http.begin(client, request->url)) {
+      request->state = HTTP_IDLE;
+      Serial.println("HTTP begin failed: " + request->url);
+      return;
+    }
+    
+    if (request->method == "POST") {
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      int httpCode = http.POST(request->postData);
+      if (request->expectResponse && httpCode == HTTP_CODE_OK) {
+        request->response = http.getString();
+      }
+    } else {
+      int httpCode = http.GET();
+      if (request->expectResponse && httpCode == HTTP_CODE_OK) {
+        request->response = http.getString();
+      }
+    }
+    
+    http.end();
+    request->state = HTTP_IDLE;
+  }
+}
+
+void startHttpRequest(HttpRequest* request, String url, String method = "GET", String postData = "", bool expectResponse = false) {
+  if (request->state != HTTP_IDLE) {
+    return; // Request already in progress
+  }
+  
+  request->url = url;
+  request->method = method;
+  request->postData = postData;
+  request->expectResponse = expectResponse;
+  request->startTime = millis();
+  request->state = HTTP_REQUESTING;
+  request->response = "";
 }
 
 // ==================== INITIALIZATION ====================
@@ -113,6 +242,7 @@ void setupWiFiSensorsDisplay() {
   for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500);
     Serial.print(".");
+    yield(); // Allow background tasks during connection
   }
   Serial.println(WiFi.status() == WL_CONNECTED ? 
     "\nConnected! IP: " + WiFi.localIP().toString() : "\nConnection failed");
@@ -147,7 +277,7 @@ void setupWiFiSensorsDisplay() {
   // Time & sensors
   timeClient.begin();
   timeClient.forceUpdate();
-  handleSensorData();
+  handleLocalSensorData();
   setOledBrightness(timeClient.getHours() < 7 ? 22 : 60);
 }
 
@@ -159,7 +289,7 @@ void setupWebServer() {
   server.on("/output/2/toggle", []() { toggleOutput(2); });
   
   // Data endpoints
-  server.on("/sensorData", handleSensorData);
+  server.on("/sensorData", handleSensorDataAPI);
   server.on("/deviceStates", handleDeviceStates);
   server.on("/device/info", handleDeviceInfo);
   server.on("/api/time", handleTimeAPI);
@@ -176,33 +306,31 @@ void setupWebServer() {
   // Clock device proxy endpoints
   setupClockEndpoints();
   
-  // VOC control
-  server.on("/voc/auto", handleVOCControl);
-  
   server.begin();
 }
 
 void setupClockEndpoints() {
+  server.on("/voc/auto", handleVOCControl);
   server.on("/clock/relay", []() {
     if (server.hasArg("state")) {
-      controlClockRelay(server.arg("state") == "on");
+      controlClockRelayNonBlocking(server.arg("state") == "on");
     }
     server.send(200, "text/plain", "OK");
   });
   
   server.on("/clock/brightness", HTTP_GET, []() {
-    forwardClockRequest("/brightness/get");
+    forwardClockRequestSync("/brightness/get");
   });
   
   server.on("/clock/brightness", HTTP_POST, []() {
     if (server.hasArg("value")) {
-      setClockBrightness(server.arg("value").toInt());
+      setClockBrightnessNonBlocking(server.arg("value").toInt());
     }
     server.send(200, "text/plain", "OK");
   });
   
   server.on("/clock/brightness/auto", HTTP_GET, []() {
-    String response = httpGetString("http://" + clockIP + "/brightness/get");
+    String response = httpGetStringSync("http://" + clockIP + "/brightness/get");
     if (!response.isEmpty()) {
       DynamicJsonDocument doc(256);
       deserializeJson(doc, response);
@@ -214,13 +342,16 @@ void setupClockEndpoints() {
   
   server.on("/clock/brightness/auto", HTTP_POST, []() {
     if (server.hasArg("state")) {
-      httpPost("http://" + clockIP + "/brightness/auto", "state=" + server.arg("state"));
+      startHttpRequest(&clockControlRequest, 
+                      "http://" + clockIP + "/brightness/auto", 
+                      "POST", 
+                      "state=" + server.arg("state"));
       server.send(200, "text/plain", "OK");
     }
   });
   
   server.on("/clock/relay/status", HTTP_GET, []() {
-    String response = httpGetString("http://" + clockIP + "/relay/state");
+    String response = httpGetStringSync("http://" + clockIP + "/relay/state");
     server.send(response.isEmpty() ? 500 : 200, "text/plain", 
                 response.isEmpty() ? "Error" : response);
   });
@@ -239,16 +370,44 @@ void autoBrightnessCheck() {
 
 void updateDisplay() {
   char buffer[16];
+  char label[16];
   
   switch (currentMode) {
-    case SHOW_AVG_TEMP:     snprintf(buffer, 16, "%.1fC", avgTemp); break;
-    case SHOW_AVG_HUMIDITY: snprintf(buffer, 16, "%.1f%%", avgHumid); break;
-    case SHOW_HEAT_INDEX:   snprintf(buffer, 16, "HI:%.1fC", avgHeatIndex); break;
-    case SHOW_PRESSURE:     snprintf(buffer, 16, "P:%.1f", displayedPressure); break;
-    case SHOW_TVOC:         snprintf(buffer, 16, "%dPPB", displayedTVOC); break;
+    case SHOW_AVG_TEMP:     
+      snprintf(label, 16, "Temperature:");
+      snprintf(buffer, 16, "%.1fC", avgTemp); 
+      break;
+    case SHOW_AVG_HUMIDITY: 
+      snprintf(label, 16, "Humidity:");
+      snprintf(buffer, 16, "%.1f%%", avgHumid); 
+      break;
+    case SHOW_HEAT_INDEX:   
+      snprintf(label, 16, "Feels like:");
+      snprintf(buffer, 16, "%.1fC", avgHeatIndex); 
+      break;
+    case SHOW_PRESSURE:     
+      snprintf(label, 16, "Pressure:");
+      snprintf(buffer, 16, "%.1f", displayedPressure); 
+      break;
+    case SHOW_TVOC:         
+      snprintf(label, 16, "TVOC:");
+      snprintf(buffer, 16, "%.2fPPM", displayedTVOC/1000.0); 
+      break;
   }
   
-  displayCenteredText(buffer);
+  u8g2.firstPage();
+  do {
+    // Draw small label at top
+    u8g2.setFont(u8g2_font_siji_t_6x10);  // Small font for label
+    u8g2.drawStr(0, 7, label);
+    
+    // Draw big data value below
+    u8g2.setFont(u8g2_font_inr21_mr);  // Slightly smaller than helvB24 to fit
+    int dataX = (128 - u8g2.getStrWidth(buffer)) / 2;
+    u8g2.drawStr(dataX, 32, buffer);  // Position below label
+    
+  } while (u8g2.nextPage());
+  
   currentMode = static_cast<DisplayMode>((currentMode + 1) % 5);
 }
 
@@ -285,27 +444,58 @@ void checkTimer() {
   }
 }
 
-void checkVOCLevels() {
-  if (!autoVOCControl) return;
+void checkVOCLevelsNonBlocking() {
+  if (!autoVOCControl || pendingVOCAction) return;
   
   bool shouldActivate = (remoteTVOC >= 1500 || avgHeatIndex >= 45);
   
   if (shouldActivate && !relayTriggeredByVOC) {
-    controlClockRelay(true);
+    controlClockRelayNonBlocking(true);
     relayTriggeredByVOC = true;
   } else if (!shouldActivate && relayTriggeredByVOC) {
-    controlClockRelay(false);
+    controlClockRelayNonBlocking(false);
     relayTriggeredByVOC = false;
   }
 }
 
 // ==================== SENSOR & DATA ====================
-void handleSensorData() {
+void handleLocalSensorData() {
   if (DHT.read() == DHT20_OK) {
     sensorTemperature = DHT.getTemperature();
     sensorHumidity = DHT.getHumidity();
   }
   
+  // Update averages
+  updateAverages();
+}
+
+void requestRemoteSensorData() {
+  if (remoteDataRequest.state == HTTP_IDLE) {
+    startHttpRequest(&remoteDataRequest, 
+                    "http://" + clockIP + "/sensor/api", 
+                    "GET", 
+                    "", 
+                    true);
+  }
+}
+
+void parseRemoteSensorData(String response) {
+  if (response.isEmpty()) return;
+  
+  DynamicJsonDocument doc(256);
+  if (deserializeJson(doc, response) == DeserializationError::Ok) {
+    // Only update if values are valid
+    if (doc.containsKey("temperature")) remoteTemp = doc["temperature"];
+    if (doc.containsKey("humidity")) remoteHumid = doc["humidity"];
+    if (doc.containsKey("pressure")) remotePressure = doc["pressure"];
+    if (doc.containsKey("tvoc")) remoteTVOC = doc["tvoc"];
+    
+    // Update averages and derived values
+    updateAverages();
+  }
+}
+
+void updateAverages() {
   avgTemp = (sensorTemperature + remoteTemp) / 2.0;
   avgHumid = (sensorHumidity + remoteHumid) / 2.0;
   
@@ -316,37 +506,24 @@ void handleSensorData() {
               - 0.05481717 * pow(avgHumid, 2) + 0.00122874 * pow(tempF, 2) * avgHumid
               + 0.00085282 * tempF * pow(avgHumid, 2)
               - 0.00000199 * pow(tempF, 2) * pow(avgHumid, 2);
-    if (avgHumid < 13.0 && tempF >= 80.0 && tempF <= 112.0) {
-        float adjustment = ((13.0 - avgHumid) / 4.0) * sqrt((17.0 - abs(tempF - 95.0)) / 17.0);
-        hiF -= adjustment;
-    }
-    if (avgHumid > 85.0 && tempF >= 80.0 && tempF <= 87.0) {
-        float adjustment = ((avgHumid - 85.0) / 10.0) * ((87.0 - tempF) / 5.0);
-        hiF += adjustment;
-    }
+  if (avgHumid < 13.0 && tempF >= 80.0 && tempF <= 112.0) {
+      float adjustment = ((13.0 - avgHumid) / 4.0) * sqrt((17.0 - abs(tempF - 95.0)) / 17.0);
+      hiF -= adjustment;
+  }
+  if (avgHumid > 85.0 && tempF >= 80.0 && tempF <= 87.0) {
+      float adjustment = ((avgHumid - 85.0) / 10.0) * ((87.0 - tempF) / 5.0);
+      hiF += adjustment;
+  }
   avgHeatIndex = (hiF - 32) * 5.0 / 9.0;
   
   displayedPressure = remotePressure;
   displayedTVOC = remoteTVOC;
-  
-  // Send JSON response
-  String json = createSensorJSON();
-  server.send(200, "application/json; charset=utf-8", json);
 }
 
-String getClockSensorData() {
-  String response = httpGetString("http://" + clockIP + "/sensor/api");
-  if (!response.isEmpty()) {
-    DynamicJsonDocument doc(256);
-    deserializeJson(doc, response);
-    
-    // Only update if values are valid
-    if (doc.containsKey("temperature")) remoteTemp = doc["temperature"];
-    if (doc.containsKey("humidity")) remoteHumid = doc["humidity"];
-    if (doc.containsKey("pressure")) remotePressure = doc["pressure"];
-    if (doc.containsKey("tvoc")) remoteTVOC = doc["tvoc"];
-  }
-  return response;
+void handleSensorDataAPI() {
+  // This is for API response
+  String json = createSensorJSON();
+  server.send(200, "application/json; charset=utf-8", json);
 }
 
 // ==================== WEB HANDLERS ====================
@@ -371,7 +548,7 @@ void handleTimer() {
   }
   
   deviceTimers[deviceIndex] = {
-    millis() + (duration * 60000),
+    millis() + (duration * 60000UL),
     server.arg("state"),
     true
   };
@@ -396,35 +573,39 @@ void handleTimerCancel() {
 }
 
 void handleTimerStatus() {
-  String json = "{\"timers\":[";
-  bool hasActive = false;
+  DynamicJsonDocument doc(512);
+  JsonArray timers = doc.createNestedArray("timers");
   
   for (int i = 0; i < 3; i++) {
-    if (deviceTimers[i].active && deviceTimers[i].endTime > millis()) {
-      if (hasActive) json += ",";
+    if (deviceTimers[i].active) {
+      JsonObject timer = timers.createNestedObject();
+      timer["device"] = getDeviceName(i);
+      timer["deviceId"] = getDeviceId(i);
+      timer["targetState"] = deviceTimers[i].targetState;
       
       unsigned long remaining = deviceTimers[i].endTime - millis();
-      int minutes = remaining / 60000;
-      int seconds = (remaining % 60000) / 1000;
-      
-      json += "{\"device\":\"" + getDeviceName(i) + "\","
-              "\"deviceId\":\"" + getDeviceId(i) + "\","
-              "\"targetState\":\"" + deviceTimers[i].targetState + "\","
-              "\"remainingMinutes\":" + String(minutes) + ","
-              "\"remainingSeconds\":" + String(seconds) + ","
-              "\"remainingTime\":\"" + String(minutes) + "m " + String(seconds) + "s\"}";
-      hasActive = true;
+      timer["remainingMinutes"] = remaining / 60000;
+      timer["remainingSeconds"] = (remaining % 60000) / 1000;
+      timer["remainingTime"] = 
+        String(remaining / 60000) + "m " + 
+        String((remaining % 60000) / 1000) + "s";
     }
   }
-  
-  json += "],\"hasActiveTimers\":" + String(hasActive ? "true" : "false") + "}";
+  doc["hasActiveTimers"] = timers.size() > 0;
+
+  String json;
+  serializeJson(doc, json);
   server.send(200, "application/json", json);
 }
 
 void handleDeviceStates() {
-  String json = "{\"fan\":\"" + outputs[0].state + "\","
-                "\"bigLight\":\"" + outputs[1].state + "\","
-                "\"light\":\"" + outputs[2].state + "\"}";
+  StaticJsonDocument<128> doc;
+  doc["fan"] = outputs[0].state;
+  doc["bigLight"] = outputs[1].state;
+  doc["light"] = outputs[2].state;
+  
+  String json;
+  serializeJson(doc, json);
   server.send(200, "application/json", json);
 }
 
@@ -433,9 +614,13 @@ void handleDeviceInfo() {
 }
 
 void handleTimeAPI() {
-  String json = "{\"hours\":" + String(timeClient.getHours()) + ","
-                "\"minutes\":" + String(timeClient.getMinutes()) + ","
-                "\"seconds\":" + String(timeClient.getSeconds()) + "\"}";
+  StaticJsonDocument<128> doc;
+  doc["hours"] = timeClient.getHours();
+  doc["minutes"] = timeClient.getMinutes();
+  doc["seconds"] = timeClient.getSeconds();
+  
+  String json;
+  serializeJson(doc, json);
   server.send(200, "application/json", json);
 }
 
@@ -469,7 +654,7 @@ void handleVOCControl() {
   if (server.hasArg("state")) {
     autoVOCControl = (server.arg("state") == "on");
     if (!autoVOCControl && relayTriggeredByVOC) {
-      controlClockRelay(false);
+      controlClockRelayNonBlocking(false);
       relayTriggeredByVOC = false;
     }
   }
@@ -527,54 +712,49 @@ void displayCenteredText(const char* text) {
   } while (u8g2.nextPage());
 }
 
-void controlClockRelay(bool state) {
-  httpGet("http://" + clockIP + "/relay/" + (state ? "on" : "off"));
+void controlClockRelayNonBlocking(bool state) {
+  if (vocControlRequest.state == HTTP_IDLE) {
+    pendingVOCAction = true;
+    pendingVOCState = state;
+    startHttpRequest(&vocControlRequest, 
+                    "http://" + clockIP + "/relay/" + (state ? "on" : "off"));
+  }
 }
 
-void setClockBrightness(int value) {
-  httpPost("http://" + clockIP + "/brightness", "value=" + String(value));
+void setClockBrightnessNonBlocking(int value) {
+  if (clockControlRequest.state == HTTP_IDLE) {
+    startHttpRequest(&clockControlRequest, 
+                    "http://" + clockIP + "/brightness", 
+                    "POST", 
+                    "value=" + String(value));
+  }
 }
 
 void maintainWiFiConnection() {
-  if (WiFi.status() != WL_CONNECTED && millis() - lastReconnectTime >= 10000) {
-    lastReconnectTime = millis();
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected, attempting reconnection...");
     WiFi.reconnect();
   }
 }
 
-// ==================== HELPER FUNCTIONS ====================
-String httpGetString(String url) {
+// ==================== SYNCHRONOUS HELPER FUNCTIONS (for immediate web responses) ====================
+String httpGetStringSync(String url) {
   WiFiClient client;
   HTTPClient http;
+  http.setTimeout(3000); // 3 second timeout for sync requests
   http.begin(client, url);
   String result = (http.GET() == HTTP_CODE_OK) ? http.getString() : "";
   http.end();
   return result;
 }
 
-void httpGet(String url) {
-  WiFiClient client;
-  HTTPClient http;
-  http.begin(client, url);
-  http.GET();
-  http.end();
-}
-
-void httpPost(String url, String data) {
-  WiFiClient client;
-  HTTPClient http;
-  http.begin(client, url);
-  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  http.POST(data);
-  http.end();
-}
-
-void forwardClockRequest(String endpoint) {
-  String response = httpGetString("http://" + clockIP + endpoint);
+void forwardClockRequestSync(String endpoint) {
+  String response = httpGetStringSync("http://" + clockIP + endpoint);
   server.send(response.isEmpty() ? 500 : 200, "application/json", 
               response.isEmpty() ? "{\"error\":\"failed\"}" : response);
 }
 
+// ==================== HELPER FUNCTIONS ====================
 int getDeviceIndex(String device) {
   if (device == "fan") return 0;
   if (device == "bigLight") return 1;
@@ -593,11 +773,16 @@ String getDeviceId(int index) {
 }
 
 String createSensorJSON() {
-  return "{\"avgTemp\":" + String(avgTemp, 1) + ","
-         "\"avgHumid\":" + String(avgHumid, 1) + ","
-         "\"heatIndex\":" + String(avgHeatIndex, 1) + ","
-         "\"pressure\":" + String(displayedPressure, 1) + ","
-         "\"tvoc\":" + String(displayedTVOC) + ","
-         "\"brightness\":" + String(displayBrightness) + ","
-         "\"autoBrightness\":" + String(autoBrightness ? "true" : "false") + "}";
+  StaticJsonDocument<256> doc;
+  doc["avgTemp"] = avgTemp;
+  doc["avgHumid"] = avgHumid;
+  doc["heatIndex"] = avgHeatIndex;
+  doc["pressure"] = displayedPressure;
+  doc["tvoc"] = displayedTVOC;
+  doc["brightness"] = displayBrightness;
+  doc["autoBrightness"] = autoBrightness;
+  
+  String json;
+  serializeJson(doc, json);
+  return json;
 }
