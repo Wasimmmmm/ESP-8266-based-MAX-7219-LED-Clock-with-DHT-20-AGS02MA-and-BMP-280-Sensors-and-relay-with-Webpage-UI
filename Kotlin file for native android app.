@@ -457,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                 tvHumidity.text = String.format("%.1f%%", json.getDouble("avgHumid"))
                 tvHeatIndex.text = String.format("%.1f°C", json.getDouble("heatIndex"))
                 tvPressure.text = String.format("%.1fmmHg", json.getDouble("pressure"))
-                tvTvoc.text = String.format("%.3fppm", (json.getDouble("tvoc"))/1000)
+                tvTvoc.text = String.format("%.3fppm", (json.getDouble("tvoc"))/1000.0)
 
                 val brightness = json.getInt("brightness")
                 tvBrightnessValue.text = "$brightness%"
