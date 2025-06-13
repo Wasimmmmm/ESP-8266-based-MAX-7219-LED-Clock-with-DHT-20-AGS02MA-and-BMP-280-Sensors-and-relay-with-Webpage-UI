@@ -90,6 +90,7 @@ void setup() {
 
 // ==================== MAIN LOOP ====================
 void loop() {
+  MDNS.update();
   server.handleClient();
   ArduinoOTA.handle();
   // Handle non-blocking HTTP requests
