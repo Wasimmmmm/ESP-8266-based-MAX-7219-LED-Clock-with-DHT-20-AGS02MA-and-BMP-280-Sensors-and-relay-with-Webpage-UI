@@ -1,5 +1,8 @@
 package com.example.nativeSmartHome
 
+import android.content.Context
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Bundle
 import android.util.Log
 import android.widget.*
@@ -14,13 +17,21 @@ import org.json.JSONObject
 import java.io.IOException
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import java.net.InetAddress
 
 class MainActivity : AppCompatActivity() {
 
     // Network related
     private lateinit var client: OkHttpClient
-    private var deviceIP = "192.168.0.108"
+    private var deviceHostname = "HOME"
+    private var deviceIP = ""
     private lateinit var baseUrl: String
+
+    // Network Service Discovery
+    private lateinit var nsdManager: NsdManager
+    private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var resolveListener: NsdManager.ResolveListener? = null
+    private val serviceType = "_http._tcp."
 
     // UI Elements - Sensor data
     private lateinit var tvIpAddress: TextView
@@ -39,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvClockBrightnessValue: TextView
     private lateinit var tvExhaust: TextView
     private lateinit var tvVocStatus: TextView
+    private lateinit var tvDeviceStatus: TextView
 
     // UI Elements - Switches
     private lateinit var switchFan: MaterialSwitch
@@ -82,24 +94,36 @@ class MainActivity : AppCompatActivity() {
         initializeViews()
         setupEventListeners()
         setupSpinners()
-        loadDeviceIP()
 
         dataRefresh()
+
+        loadDeviceSettings()
+
+        // Initialize NSD Manager
+        nsdManager = (getSystemService(Context.NSD_SERVICE) as NsdManager)
+
+        // Try to discover device automatically
+        discoverDevices()
+
     }
 
     override fun onResume() {
         super.onResume()
-        dataRefresh()
+        if (deviceIP.isNotEmpty()) {
+            dataRefresh()
+        }
     }
 
     override fun onPause() {
         super.onPause()
         stopAllJobs()
+        stopDiscovery()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         stopAllJobs()
+        stopDiscovery()
         fastUpdateScope.cancel()
         slowUpdateScope.cancel()
     }
@@ -121,13 +145,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateBaseUrl() {
-        baseUrl = "http://$deviceIP"
+        baseUrl = if (deviceIP.isNotEmpty()) {
+            "http://$deviceIP"
+        } else {
+            "http://$deviceHostname.local"
+        }
     }
 
-    private fun loadDeviceIP() {
+    private fun loadDeviceSettings() {
         val prefs = getSharedPreferences("JARVIS_PREFS", MODE_PRIVATE)
-        deviceIP = prefs.getString("device_ip", deviceIP) ?: deviceIP
+        deviceHostname = prefs.getString("device_hostname", deviceHostname) ?: deviceHostname
+        deviceIP = prefs.getString("device_ip", "") ?: ""
         updateBaseUrl()
+        updateDeviceDisplay()
+    }
+
+    private fun saveDeviceSettings() {
+        val prefs = getSharedPreferences("JARVIS_PREFS", MODE_PRIVATE)
+        prefs.edit().apply {
+            putString("device_hostname", deviceHostname)
+            putString("device_ip", deviceIP)
+            apply()
+        }
+    }
+
+    private fun updateDeviceDisplay() {
+        val displayText = if (deviceIP.isNotEmpty()) {
+            "Device: $deviceHostname ($deviceIP)"
+        } else {
+            "Device: $deviceHostname (discovering...)"
+        }
+        tvIpAddress.text = displayText
     }
 
     private fun initializeViews() {
@@ -148,6 +196,7 @@ class MainActivity : AppCompatActivity() {
         tvClockBrightnessValue = findViewById(R.id.tv_clock_brightness_value)
         tvExhaust = findViewById(R.id.tv_exhaust_status)
         tvVocStatus = findViewById(R.id.tv_voc_status)
+        tvDeviceStatus = findViewById(R.id.tv_device_status)
 
         // Switches
         switchFan = findViewById(R.id.switch_fan)
@@ -179,7 +228,226 @@ class MainActivity : AppCompatActivity() {
         seekbarClockBrightness = findViewById(R.id.seekbar_clock_brightness)
         btnRestartDevice = findViewById(R.id.btn_restart_device)
 
+        tvDeviceStatus.text = "Searching for device..."
+        updateDeviceDisplay()
+
     }
+
+    private fun discoverDevices() {
+        stopDiscovery()
+
+        tvDeviceStatus.text = "Discovering devices..."
+
+        // Method 1: Try direct hostname resolution
+        fastUpdateScope.launch {
+            tryDirectHostnameResolution()
+        }
+
+        // Method 2: Use mDNS discovery
+        startMdnsDiscovery()
+
+        // Method 3: Network scan as fallback
+        fastUpdateScope.launch {
+            delay(5000) // Wait 5 seconds for mDNS
+            if (deviceIP.isEmpty()) {
+                performNetworkScan()
+            }
+        }
+    }
+
+    private suspend fun tryDirectHostnameResolution() = withContext(Dispatchers.IO) {
+        try {
+            val hostnamesToTry = listOf(
+                "$deviceHostname.local",
+                deviceHostname,
+                "${deviceHostname}.lan"
+            )
+
+            for (hostname in hostnamesToTry) {
+                try {
+                    val address = InetAddress.getByName(hostname)
+                    val ip = address.hostAddress
+
+                    // Test if the device responds
+                    val testUrl = "http://$ip/deviceStates"
+                    val request = Request.Builder().url(testUrl).build()
+                    val response = client.newCall(request).execute()
+
+                    if (response.isSuccessful) {
+                        withContext(Dispatchers.Main) {
+                            deviceIP = ip ?: ""
+                            updateBaseUrl()
+                            updateDeviceDisplay()
+                            saveDeviceSettings()
+                            dataRefresh()
+                            tvDeviceStatus.text = "Connected via hostname resolution"
+                            Log.d("Discovery", "Device found via hostname: $hostname -> $ip")
+                        }
+                        return@withContext
+                    }
+                } catch (e: Exception) {
+                    Log.d("Discovery", "Failed to resolve $hostname: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("Discovery", "Hostname resolution failed", e)
+        }
+    }
+
+    private fun startMdnsDiscovery() {
+        resolveListener = object : NsdManager.ResolveListener {
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                Log.e("Discovery", "Resolve failed: $errorCode")
+            }
+
+            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                Log.d("Discovery", "Service resolved: ${serviceInfo.serviceName}")
+
+                val host = serviceInfo.host
+                val port = serviceInfo.port
+                val ip = host.hostAddress
+
+                Log.d("Discovery", "Device found: ${serviceInfo.serviceName} at $ip:$port")
+
+                // Verify this is our device by checking the service info
+                fastUpdateScope.launch {
+                    val testResult = testDeviceConnection(ip ?: "")
+                    if (testResult) {
+                        deviceIP = ip ?: ""
+                        updateBaseUrl()
+                        updateDeviceDisplay()
+                        saveDeviceSettings()
+                        dataRefresh()
+                        tvDeviceStatus.text = "Connected via mDNS discovery"
+                        stopDiscovery()
+                    }
+                }
+            }
+        }
+
+        discoveryListener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(regType: String) {
+                Log.d("Discovery", "Service discovery started")
+            }
+
+            override fun onServiceFound(service: NsdServiceInfo) {
+                Log.d("Discovery", "Service found: ${service.serviceName}")
+
+                // Check if this might be our device
+                if (service.serviceName.contains(deviceHostname, ignoreCase = true) ||
+                    service.serviceName.contains("ESP", ignoreCase = true) ||
+                    service.serviceName.contains("jarvis", ignoreCase = true) ||
+                    service.serviceName.contains("smarthome", ignoreCase = true)) {
+
+                    Log.d("Discovery", "Attempting to resolve: ${service.serviceName}")
+                    nsdManager.resolveService(service, resolveListener)
+                }
+            }
+
+            override fun onServiceLost(service: NsdServiceInfo) {
+                Log.d("Discovery", "Service lost: ${service.serviceName}")
+            }
+
+            override fun onDiscoveryStopped(serviceType: String) {
+                Log.d("Discovery", "Discovery stopped")
+            }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.e("Discovery", "Discovery start failed: $errorCode")
+                nsdManager.stopServiceDiscovery(this)
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.e("Discovery", "Discovery stop failed: $errorCode")
+            }
+        }
+
+        nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+    }
+
+    private suspend fun performNetworkScan() = withContext(Dispatchers.IO) {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val dhcpInfo = wifiManager.dhcpInfo
+
+            // Get network base (e.g., 192.168.1.)
+            val networkBase = String.format(
+                "%d.%d.%d.",
+                dhcpInfo.gateway and 0xFF,
+                dhcpInfo.gateway shr 8 and 0xFF,
+                dhcpInfo.gateway shr 16 and 0xFF
+            )
+
+            withContext(Dispatchers.Main) {
+                tvDeviceStatus.text = "Scanning network: $networkBase*"
+            }
+
+            // Scan common IP ranges
+            val jobs = mutableListOf<Deferred<Unit>>()
+
+            for (i in 100..120) { // Common static IP range
+                jobs.add(async {
+                    val ip = "$networkBase$i"
+                    if (testDeviceConnection(ip)) {
+                        withContext(Dispatchers.Main) {
+                            deviceIP = ip
+                            updateBaseUrl()
+                            updateDeviceDisplay()
+                            saveDeviceSettings()
+                            dataRefresh()
+                            tvDeviceStatus.text = "Connected via network scan"
+                            Log.d("Discovery", "Device found via network scan: $ip")
+                        }
+                    }
+                })
+            }
+
+            jobs.awaitAll()
+
+            if (deviceIP.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    tvDeviceStatus.text = "Device not found. Check network and device name."
+                }
+            }
+
+        } catch (e: Exception) {
+            Log.e("Discovery", "Network scan failed", e)
+            withContext(Dispatchers.Main) {
+                tvDeviceStatus.text = "Network scan failed"
+            }
+        }
+    }
+
+    private suspend fun testDeviceConnection(ip: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("http://$ip/deviceStates")
+                .build()
+
+            val response = client.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                return@withContext true
+            }
+        } catch (e: Exception) {
+            Log.d("Discovery", "Connection test failed for $ip: ${e.message}")
+        }
+
+        return@withContext false
+    }
+
+    private fun stopDiscovery() {
+        try {
+            discoveryListener?.let {
+                nsdManager.stopServiceDiscovery(it)
+            }
+        } catch (e: Exception) {
+            Log.e("Discovery", "Error stopping discovery", e)
+        }
+        discoveryListener = null
+        resolveListener = null
+    }
+
 
     private fun dataRefresh() {
 
