@@ -1,3 +1,4 @@
+
 package com.example.nativeSmartHome
 
 import android.content.Context
@@ -197,7 +198,6 @@ class MainActivity : AppCompatActivity() {
         tvExhaust = findViewById(R.id.tv_exhaust_status)
         tvVocStatus = findViewById(R.id.tv_voc_status)
         tvDeviceStatus = findViewById(R.id.tv_device_status)
-
         // Switches
         switchFan = findViewById(R.id.switch_fan)
         switchBigLight = findViewById(R.id.switch_big_light)
@@ -719,22 +719,22 @@ class MainActivity : AppCompatActivity() {
         val result = makeGetRequestAsync("/sensorData")
         result
             .onSuccess { response ->
-            try {
-                val json = JSONObject(response)
-                tvTemperature.text = String.format("%.1f°C", json.getDouble("avgTemp"))
-                tvHumidity.text = String.format("%.1f%%", json.getDouble("avgHumid"))
-                tvHeatIndex.text = String.format("%.1f°C", json.getDouble("heatIndex"))
-                tvPressure.text = String.format("%.1fmmHg", json.getDouble("pressure"))
-                tvTvoc.text = String.format("%.3fppm", (json.getDouble("tvoc"))/1000.0)
+                try {
+                    val json = JSONObject(response)
+                    tvTemperature.text = String.format("%.1f °C", json.getDouble("avgTemp"))
+                    tvHumidity.text = String.format("%.1f%%", json.getDouble("avgHumid"))
+                    tvHeatIndex.text = String.format("%.1f °C", json.getDouble("heatIndex"))
+                    tvPressure.text = String.format("%.1f mmHg", json.getDouble("pressure"))
+                    tvTvoc.text = String.format("%.3f ppm", (json.getDouble("tvoc"))/1000.0)
 
-                val brightness = json.getInt("brightness")
-                tvBrightnessValue.text = "$brightness%"
-                if (!switchAutoBrightness.isPressed) seekbarBrightness.progress = brightness
+                    val brightness = json.getInt("brightness")
+                    tvBrightnessValue.text = "$brightness%"
+                    if (!switchAutoBrightness.isPressed) seekbarBrightness.progress = brightness
 
-                val autoBrightness = json.getBoolean("autoBrightness")
-                if (!switchAutoBrightness.isPressed) {
-                    switchAutoBrightness.isChecked = autoBrightness
-                    seekbarBrightness.isEnabled = !autoBrightness
+                    val autoBrightness = json.getBoolean("autoBrightness")
+                    if (!switchAutoBrightness.isPressed) {
+                        switchAutoBrightness.isChecked = autoBrightness
+                        seekbarBrightness.isEnabled = !autoBrightness
                     }
                 } catch (e: JSONException) {
                     Log.e("MainActivity", "Sensor data parse error", e)
@@ -754,25 +754,25 @@ class MainActivity : AppCompatActivity() {
         val result = makeGetRequestAsync("/deviceStates")
         result
             .onSuccess { response ->
-            try {
-                val json = JSONObject(response)
+                try {
+                    val json = JSONObject(response)
 
-                if (!switchFan.isPressed) {
-                    val fanState = json.getString("fan")
-                    tvFanStatus.text = fanState
-                    switchFan.isChecked = !fanState.contains("Off")
-                }
+                    if (!switchFan.isPressed) {
+                        val fanState = json.getString("fan")
+                        tvFanStatus.text = fanState
+                        switchFan.isChecked = !fanState.contains("Off")
+                    }
 
-                if (!switchBigLight.isPressed) {
-                    val bigLightState = json.getString("bigLight")
-                    tvBigLightStatus.text = bigLightState
-                    switchBigLight.isChecked = bigLightState == "On"
-                }
+                    if (!switchBigLight.isPressed) {
+                        val bigLightState = json.getString("bigLight")
+                        tvBigLightStatus.text = bigLightState
+                        switchBigLight.isChecked = bigLightState == "On"
+                    }
 
-                if (!switchLight.isPressed) {
-                    val lightState = json.getString("light")
-                    tvLightStatus.text = lightState
-                    switchLight.isChecked = lightState == "On"
+                    if (!switchLight.isPressed) {
+                        val lightState = json.getString("light")
+                        tvLightStatus.text = lightState
+                        switchLight.isChecked = lightState == "On"
                     }
                 } catch (e: JSONException) {
                     Log.e("MainActivity", "Device states parse error", e)
@@ -789,25 +789,25 @@ class MainActivity : AppCompatActivity() {
         val result = makeGetRequestAsync("/timer/status")
         result
             .onSuccess { response ->
-            try {
-                val json = JSONObject(response)
-                val hasActiveTimers = json.getBoolean("hasActiveTimers")
+                try {
+                    val json = JSONObject(response)
+                    val hasActiveTimers = json.getBoolean("hasActiveTimers")
 
-                if (!hasActiveTimers) {
-                    tvTimerStatus.text = "No active timers"
-                } else {
-                    val timers = json.getJSONArray("timers")
-                    val status = StringBuilder()
-                    for (i in 0 until timers.length()) {
-                        val timer = timers.getJSONObject(i)
-                        if (i > 0) status.append("\n")
-                        status.append(timer.getString("device"))
-                            .append(" → ")
-                            .append(timer.getString("targetState"))
-                            .append(" in ")
-                            .append(timer.getString("remainingTime"))
-                    }
-                    tvTimerStatus.text = status.toString()
+                    if (!hasActiveTimers) {
+                        tvTimerStatus.text = "No active timers"
+                    } else {
+                        val timers = json.getJSONArray("timers")
+                        val status = StringBuilder()
+                        for (i in 0 until timers.length()) {
+                            val timer = timers.getJSONObject(i)
+                            if (i > 0) status.append("\n")
+                            status.append(timer.getString("device"))
+                                .append(" → ")
+                                .append(timer.getString("targetState"))
+                                .append(" in ")
+                                .append(timer.getString("remainingTime"))
+                        }
+                        tvTimerStatus.text = status.toString()
                     }
                 } catch (e: JSONException) {
                     Log.e("MainActivity", "Timer status parse error", e)
