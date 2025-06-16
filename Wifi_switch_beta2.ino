@@ -448,7 +448,7 @@ void checkTimer() {
 void checkVOCLevelsNonBlocking() {
   if (!autoVOCControl || pendingVOCAction) return;
   
-  bool shouldActivate = (remoteTVOC >= 1500 || avgHeatIndex >= 45);
+  bool shouldActivate = (remoteTVOC >= 1500);
   
   if (shouldActivate && !relayTriggeredByVOC) {
     controlClockRelayNonBlocking(true);
